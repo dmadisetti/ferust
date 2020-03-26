@@ -7,14 +7,21 @@ edition = "2018"
 [dependencies]
 libc="0.2.67"
 futures = "0.3.4"
+itertools = "0.9.0"
 
-[dependencies.lapack]
-version = "0.14"
-default-features = false
+[dependencies.lapacke]
+version = "0.2"
+
+[dependencies.lapack-src]
+version = "0.6"
 
 [lib]
 name="ferust"
 crate-type=["staticlib", "dylib"]
 
 [features]
-accelerate = ["lapack/accelerate"]
+default = ["netlib"]
+accelerate = ["lapack-src/accelerate"]
+netlib = ["lapack-src/netlib"]
+openblas = ["lapack-src/openblas"]
+intel-mkl = ["lapack-src/intel-mkl"]

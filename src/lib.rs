@@ -1,13 +1,16 @@
 #[macro_use]
 extern crate libc;
 extern crate futures;
-extern crate lapack;
+extern crate itertools;
+extern crate lapacke;
+extern crate lapack_src;
 
 use crate::futures::StreamExt;
 use core::arch::x86_64::{
     __m128d, _mm_cvtsd_f64, _mm_mul_pd, _mm_set1_pd, _mm_set_pd, _mm_shuffle_pd,
 };
 use futures::{join, stream};
+use itertools::Itertools;
 use libc::c_double;
 use std::convert::TryInto;
 use std::mem;
@@ -94,57 +97,59 @@ pub extern "C" fn solve(
     // fold vec[vec[f64]] -> vec[f64]
     // then move into memory
     let mut stiffness = (0..equations).map(|i| i as f64).collect::<Vec<f64>>();
-    let stiffness_stream = stream::iter(elements)
-        .map(|v| {
-            // For each node, we produce a local stiffness matrix
-            v.iter()
-                .map(|index| {
-                    let i: usize = (*index).try_into().unwrap();
+    // Add filter
+    let stiffness_stream = async {
+        stream::iter((0..(element_count - 1)).cartesian_product(0..(element_nodes - 1)))
+            .map(|xy| {
+                let index = elements[xy.0 as usize][xy.1 as usize];
+                let i: usize = index.try_into().unwrap();
+                let matrix: std::vec::Vec<__m128d> = [].to_vec();
+                unsafe {
                     let matrix = vec![nodes[i], _mm_mul_pd(nodes[i], _mm_set1_pd(2.0))];
-                    LocalStiffness {
-                        matrix,
-                        index: *index as usize,
-                    }
-                })
-                .collect::<Vec<LocalStiffness>>();
-        })
-        .collect::<Vec<_>>()
-        .select_all()
-        .map(|ke| {
-            stiffness[ke.index] = _mm_cvtsd_f64(ke.matrix[0]);
-            let temp = _mm_shuffle_pd(ke.matrix[0], ke.matrix[0], 1);
-            stiffness[ke.index * 2 + 1] = _mm_cvtsd_f64(temp);
-        });
+                }
+                LocalStiffness {
+                    matrix,
+                    index: index as usize,
+                }
+            })
+            // .collect::<Vec<_>>()
+            .map(|ke| unsafe {
+                stiffness[ke.index] = _mm_cvtsd_f64(ke.matrix[0]);
+                let temp = _mm_shuffle_pd(ke.matrix[0], ke.matrix[0], 1);
+                stiffness[ke.index * 2 + 1] = _mm_cvtsd_f64(temp);
+            })
+    };
 
     // Construct force vector and map to the provided solution vector.
     // then move into memory
     // let force_stream = stream::iter_ok::<_, ()>(nodes).map().fold().map();
-    let forces = vec![1.0; equations];
+    let mut forces = vec![1.0; equations];
 
-    async {
-        join!(stiffness_stream);
+    //async {
+        //join!(stiffness_stream);
+    //};
         // !join(stiffness_stream, force_stream);
-    };
 
     // Do cholesky decomposition mkl::potrs
     unsafe {
         *reaction_result = mem::transmute_copy(&forces);
-        lapack::c::dpotrf(
-            lapack::c::Layout::RowMajor, //LAPACK_ROW_MAJOR
+        let mut info = 0;
+        lapacke::dpotrf(
             b'U',
             equations as i32,
-            &mut stiffness.as_slice(),
+            &mut stiffness.as_mut_slice(),
             1,
+            &mut info
         );
-        lapack::c::dpotrs(
-            lapack::c::Layout::RowMajor, //LAPACK_ROW_MAJOR
+        lapacke::dpotrs(
             b'U',
             equations as i32,
             1,
             &stiffness.as_slice(),
             1,
-            &mut forces.as_slice(),
+            &mut forces.as_mut_slice(),
             1,
+            &mut info
         );
         *displacement_result = mem::transmute_copy(&forces);
     }

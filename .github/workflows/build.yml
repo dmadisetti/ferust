@@ -28,7 +28,7 @@ jobs:
     - name: Build Project
       run: |
         cd "${GITHUB_WORKSPACE}"
-        cargo build --release
+        cargo build --features=accelerate --release
         tar cf release.tar.gz target/release/*
 
     - name: Rust compiliation for Mac
