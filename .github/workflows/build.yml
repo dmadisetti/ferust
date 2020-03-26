@@ -23,7 +23,7 @@ jobs:
 
     - name: Install Rustup
       if: steps.rustup.outputs.cache-hit != 'true'
-      run: curl https://sh.rustup.rs -sSf | sh
+      run: curl https://sh.rustup.rs -sSf | sh -s -- -y
 
     - name: Build Project
       run: |
