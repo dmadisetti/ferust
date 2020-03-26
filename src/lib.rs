@@ -2,8 +2,8 @@
 extern crate libc;
 extern crate futures;
 extern crate itertools;
-extern crate lapacke;
 extern crate lapack_src;
+extern crate lapacke;
 
 use crate::futures::StreamExt;
 use core::arch::x86_64::{
@@ -98,48 +98,46 @@ pub extern "C" fn solve(
     // then move into memory
     let mut stiffness = (0..equations).map(|i| i as f64).collect::<Vec<f64>>();
     // Add filter
-    let stiffness_stream = async {
+    let stiffness_stream =
         stream::iter((0..(element_count - 1)).cartesian_product(0..(element_nodes - 1)))
             .map(|xy| {
                 let index = elements[xy.0 as usize][xy.1 as usize];
                 let i: usize = index.try_into().unwrap();
-                let matrix: std::vec::Vec<__m128d> = [].to_vec();
+                let mut matrix: std::vec::Vec<__m128d> = [].to_vec();
                 unsafe {
-                    let matrix = vec![nodes[i], _mm_mul_pd(nodes[i], _mm_set1_pd(2.0))];
+                    matrix = vec![nodes[i], _mm_mul_pd(nodes[i], _mm_set1_pd(2.0))];
                 }
                 LocalStiffness {
                     matrix,
                     index: index as usize,
                 }
             })
-            // .collect::<Vec<_>>()
             .map(|ke| unsafe {
                 stiffness[ke.index] = _mm_cvtsd_f64(ke.matrix[0]);
                 let temp = _mm_shuffle_pd(ke.matrix[0], ke.matrix[0], 1);
                 stiffness[ke.index * 2 + 1] = _mm_cvtsd_f64(temp);
             })
-    };
+            .collect::<Vec<_>>();
 
     // Construct force vector and map to the provided solution vector.
     // then move into memory
     // let force_stream = stream::iter_ok::<_, ()>(nodes).map().fold().map();
     let mut forces = vec![1.0; equations];
 
-    async {
-      join!(stiffness_stream);
-    };
+    join!(stiffness_stream.await);
 
     // Do cholesky decomposition mkl::potrs
     unsafe {
         *reaction_result = mem::transmute_copy(&forces);
-        lapacke::dpotrf(
+        let mut info = lapacke::dpotrf(
             lapacke::Layout::RowMajor,
             b'U',
             equations as i32,
             &mut stiffness.as_mut_slice(),
             1,
         );
-        lapacke::dpotrs(
+        eprintln!("dpotrf info {}", info);
+        info = lapacke::dpotrs(
             lapacke::Layout::RowMajor,
             b'U',
             equations as i32,
@@ -149,9 +147,11 @@ pub extern "C" fn solve(
             &mut forces.as_mut_slice(),
             1,
         );
+        eprintln!("dpotrf info {}", info);
         *displacement_result = mem::transmute_copy(&forces);
     }
 
+    eprint!("Hello world");
     // Solve the system with the Cholesky demcoposition mkl::potrs
 
     // unsafe {

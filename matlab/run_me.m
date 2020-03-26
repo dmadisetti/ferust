@@ -14,6 +14,8 @@ filename = "Biaxial_Q4_2x2.txt";
     Force_Node, bforce, disp_BC] = Read_input(filename);
 
 % Now we can run our solver
-handle = @() solver.solve(node, element, elemType, nel, nen, nIntPts, ...
-    nnd, ps, nu, E, Force_Node, bforce, disp_BC);
-timeit(handle)
+%handle = @() solver.solve(node, element, elemType, nel, nen, nIntPts, ...
+%    nnd, ps, nu, E, Force_Node, bforce, disp_BC);
+%timeit(handle)
+solver.solve(node, element, elemType, nel, nen, nIntPts, ...
+    nnd, ps, nu, E, Force_Node, bforce, disp_BC)
