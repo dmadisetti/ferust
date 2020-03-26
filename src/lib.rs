@@ -125,23 +125,22 @@ pub extern "C" fn solve(
     // let force_stream = stream::iter_ok::<_, ()>(nodes).map().fold().map();
     let mut forces = vec![1.0; equations];
 
-    //async {
-        //join!(stiffness_stream);
-    //};
-        // !join(stiffness_stream, force_stream);
+    async {
+      join!(stiffness_stream);
+    };
 
     // Do cholesky decomposition mkl::potrs
     unsafe {
         *reaction_result = mem::transmute_copy(&forces);
-        let mut info = 0;
         lapacke::dpotrf(
+            lapacke::Layout::RowMajor,
             b'U',
             equations as i32,
             &mut stiffness.as_mut_slice(),
             1,
-            &mut info
         );
         lapacke::dpotrs(
+            lapacke::Layout::RowMajor,
             b'U',
             equations as i32,
             1,
@@ -149,7 +148,6 @@ pub extern "C" fn solve(
             1,
             &mut forces.as_mut_slice(),
             1,
-            &mut info
         );
         *displacement_result = mem::transmute_copy(&forces);
     }

@@ -20,7 +20,7 @@ name="ferust"
 crate-type=["staticlib", "dylib"]
 
 [features]
-default = ["netlib"]
+default = ["intel-mkl"]
 accelerate = ["lapack-src/accelerate"]
 netlib = ["lapack-src/netlib"]
 openblas = ["lapack-src/openblas"]
