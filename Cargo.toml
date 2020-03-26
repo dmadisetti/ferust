@@ -1,0 +1,20 @@
+[package]
+name = "ferust"
+version = "0.1.0"
+authors = ["Dylan Madisetti <madisetti@jhu.edu>"]
+edition = "2018"
+
+[dependencies]
+libc="0.2.67"
+futures = "0.3.4"
+
+[dependencies.lapack]
+version = "0.14"
+default-features = false
+
+[lib]
+name="ferust"
+crate-type=["staticlib", "dylib"]
+
+[features]
+accelerate = ["lapack/accelerate"]

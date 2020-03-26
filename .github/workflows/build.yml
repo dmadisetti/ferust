@@ -1,0 +1,38 @@
+name: bazel-test
+on: [push]
+jobs:
+  test:
+    runs-on: macos-latest
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Mount rustup cache
+      id: rustup
+      uses: actions/cache@v1
+      with:
+        path: "/home/runner/.rustup"
+        key: target-tmp
+
+    - name: Mount cargo cache
+      id: target-cache
+      uses: actions/cache@v1
+      with:
+        path: "/home/runner/target"
+        key: target-tmp
+
+    - name: Install Rustup
+      if: steps.rustup.outputs.cache-hit != 'true'
+      run: curl https://sh.rustup.rs -sSf | sh
+
+    - name: Build Project
+      run: |
+        cd "${GITHUB_WORKSPACE}"
+        cargo build --release
+        tar cf release.tar.gz target/release/*
+
+    - name: Rust compiliation for Mac
+      uses: actions/upload-artifact@v1
+      with:
+        name: release
+        path: release.tar.gz
