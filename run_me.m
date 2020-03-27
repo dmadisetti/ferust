@@ -3,7 +3,8 @@
 % integration. We need to load these libraries first. I don't think the
 % loading of these libraries should count towards my time?
 
-library_path = 'target\debug\ferust.dll';
+addpath('examples', 'matlab');
+library_path = 'target\debug\ferust';
 header_path = 'src\ferust.h';
 solver = Solver(library_path, header_path);
 
@@ -14,8 +15,7 @@ filename = "Biaxial_Q4_2x2.txt";
     Force_Node, bforce, disp_BC] = Read_input(filename);
 
 % Now we can run our solver
-%handle = @() solver.solve(node, element, elemType, nel, nen, nIntPts, ...
-%    nnd, ps, nu, E, Force_Node, bforce, disp_BC);
-%timeit(handle)
-solver.solve(node, element, elemType, nel, nen, nIntPts, ...
-    nnd, ps, nu, E, Force_Node, bforce, disp_BC)
+handle = @() solver.solve(node, element, elemType, nel, nen, nIntPts, ...
+    nnd, ps, nu, E, Force_Node, bforce, disp_BC);
+timeit(handle)
+disp("If it ran, we're probably good :)");

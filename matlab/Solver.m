@@ -12,13 +12,12 @@ classdef Solver < handle
                     library_path = 'target\debug\ferust.dll';
                 end
             end
-            if ~isempty(loaded) && ...
+            if libisloaded('libferust') && ...
                     ~(strcmp(library_cached, library_path) && ...
                       strcmp(header_cached, header_path))
                     unloadlibrary libferust
             end
             loadlibrary(library_path, header_path, 'alias', 'libferust');
-            loaded = 1;
             library_cached = library_path;
             header_cached = header_path;
         end
@@ -26,23 +25,27 @@ classdef Solver < handle
                 element_nodes, integration_points, node_count, ...
                 plane_stress, nu, E, reactions, body_force, ...
                 displacements)
-            solver.displacements = zeros(size(nodes));
-            solver.forces = zeros(size(nodes));
+            solver.displacements = zeros(size(nodes))';
+            solver.forces = zeros(size(nodes))';
             displacement_nodes = cast(displacements(:, 1:2) - 1, 'uint16');
             displacements = displacements(:, 3);
-
             d = libpointer('doublePtr', solver.displacements);
             f = libpointer('doublePtr', solver.forces);
             % Note that we scramble the arguments into something a bit more
             % sane to our rust function.
+            node_count
             calllib('libferust', 'solve', element_count, element_nodes, ...
                 integration_points, node_count, plane_stress, ...
                 length(displacements), length(reactions), nu, E, ...
                 body_force, nodes, elements - 1, reactions - 1, ...
-                displacement_nodes, displacements, d, f);
+                displacement_nodes', displacements, d, f)
+            solver.displacements = d.Value;
+            solver.forces = f.Value;
         end
         function delete(solver)
-            unloadlibrary libferust
+            if libisloaded('libferust')
+                unloadlibrary libferust
+            end
         end
     end
 end

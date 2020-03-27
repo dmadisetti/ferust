@@ -12,6 +12,7 @@ use core::arch::x86_64::{
 use futures::{join, stream};
 use itertools::Itertools;
 use libc::c_double;
+use std::collections::HashSet;
 use std::convert::TryInto;
 use std::mem;
 use std::{slice, vec};
@@ -48,9 +49,16 @@ pub extern "C" fn solve(
     displacement_result: *mut c_double,
     reaction_result: *mut c_double,
 ) {
-    let size: usize = elements as usize;
-    let (nodes, elements, reactions, displacement_nodes, displacement_given) = unsafe {
-        let nodes = (1..node_count)
+    // Cast from raw pointers into safer rust types.
+    let element_nodes: usize = element_nodes as usize;
+    let (nodes, elements, reactions, displacement_nodes, displacement_given): (
+        std::vec::Vec<std::arch::x86_64::__m128d>,
+        std::vec::Vec<std::vec::Vec<u16>>,
+        std::vec::Vec<u16>,
+        std::collections::HashSet<std::vec::Vec<u16>>,
+        std::vec::Vec<f64>,
+    ) = unsafe {
+        let nodes = (0..node_count)
             .map(|i| {
                 _mm_set_pd(
                     *nodes.offset((i * 2 + 1) as isize),
@@ -59,25 +67,25 @@ pub extern "C" fn solve(
             })
             .collect::<Vec<__m128d>>();
 
-        let elements = (1..element_count)
+        let elements = (0..element_count)
             .map(|i| {
                 slice::from_raw_parts(
-                    elements.offset((i * element_nodes) as isize),
-                    element_nodes as usize,
+                    elements.offset((i as isize) * element_nodes as isize),
+                    element_nodes,
                 )
                 .to_vec()
             })
             .collect::<Vec<Vec<u16>>>();
 
-        let reactions = (1..reactions_count)
+        let reactions = (0..reactions_count)
             .map(|i| *reactions.offset(i as isize))
             .collect::<Vec<u16>>();
 
-        let displacement_nodes = (1..conditions_count)
+        let displacement_nodes = (0..conditions_count)
             .map(|i| slice::from_raw_parts(displacement_nodes.offset((i * 2) as isize), 2).to_vec())
-            .collect::<Vec<Vec<u16>>>();
+            .collect::<HashSet<Vec<u16>>>();
 
-        let displacement_given = (1..conditions_count)
+        let displacement_given = (0..conditions_count)
             .map(|i| *displacement_given.offset(i as isize))
             .collect::<Vec<f64>>();
 
@@ -90,14 +98,17 @@ pub extern "C" fn solve(
         )
     };
 
-    let equations = (nodes.len() * (nodes.len() + 1)) - displacement_nodes.len();
+    // TODO: Move everything into own module. Just here for proof of concept.
+
+    let equations = nodes.len() * 2 - displacement_given.len();
+    let stiffness_entries = equations * (equations + 1) / 2;
     // Construct Stiffness Matrix UPRH
-    // map -> vec[f64] : c_uint
-    // collect vec[f64] -> vec[vec[f64]]
-    // fold vec[vec[f64]] -> vec[f64]
+    // map grid -> LocalStiffness
+    // gather LocalStiffness -> Global Stiffness
     // then move into memory
-    let mut stiffness = (0..equations).map(|i| i as f64).collect::<Vec<f64>>();
-    // Add filter
+    let mut stiffness = (0..stiffness_entries)
+        .map(|i| i as f64)
+        .collect::<Vec<f64>>();
     let stiffness_stream =
         stream::iter((0..(element_count - 1)).cartesian_product(0..(element_nodes - 1)))
             .map(|xy| {
@@ -105,6 +116,8 @@ pub extern "C" fn solve(
                 let i: usize = index.try_into().unwrap();
                 let mut matrix: std::vec::Vec<__m128d> = [].to_vec();
                 unsafe {
+                    // TODO: Solve the nodal stiffness kab = \int BaDBb J
+                    // Just threw in a SSE command as proof of concept.
                     matrix = vec![nodes[i], _mm_mul_pd(nodes[i], _mm_set1_pd(2.0))];
                 }
                 LocalStiffness {
@@ -113,6 +126,8 @@ pub extern "C" fn solve(
                 }
             })
             .map(|ke| unsafe {
+                // TODO: A proper global assembly
+                // Just do some mm commands to test
                 stiffness[ke.index] = _mm_cvtsd_f64(ke.matrix[0]);
                 let temp = _mm_shuffle_pd(ke.matrix[0], ke.matrix[0], 1);
                 stiffness[ke.index * 2 + 1] = _mm_cvtsd_f64(temp);
@@ -121,42 +136,83 @@ pub extern "C" fn solve(
 
     // Construct force vector and map to the provided solution vector.
     // then move into memory
+    // TODO: Force stream calculation and assembly like stiffness.
     // let force_stream = stream::iter_ok::<_, ()>(nodes).map().fold().map();
-    let mut forces = vec![1.0; equations];
+    let mut forces: std::vec::Vec<f64> = vec![1.0; equations];
 
-    join!(stiffness_stream.await);
+    /* TODO: Stream stiffness calculation concurrently with force calculation.
+    async {
+        join!(stiffness_stream.await);
+    };
+    */
+
+    // TODO: Condense this into a single function with displacement extraction.
+    // Extract the forces vector
+    {
+        let mut i = 0;
+        let mut j = 0;
+        for node in 0..node_count {
+            for dim in 0..2 {
+                let index = (node * 2 + dim) as isize;
+                if displacement_nodes.contains(&vec![node, dim]) {
+                    unsafe {
+                        // TODO: Set this to the calculated force.
+                        *reaction_result.offset(index) = displacement_given[i];
+                    }
+                    i += 1;
+                } else {
+                    unsafe {
+                        *reaction_result.offset(index) = -forces[j];
+                    }
+                    j += 1;
+                }
+            }
+        }
+    }
 
     // Do cholesky decomposition mkl::potrs
+    // TODO: Debug when info indicates a failure.
     unsafe {
-        *reaction_result = mem::transmute_copy(&forces);
         let mut info = lapacke::dpotrf(
             lapacke::Layout::RowMajor,
             b'U',
             equations as i32,
             &mut stiffness.as_mut_slice(),
-            1,
+            equations as i32,
         );
-        eprintln!("dpotrf info {}", info);
         info = lapacke::dpotrs(
             lapacke::Layout::RowMajor,
             b'U',
             equations as i32,
             1,
             &stiffness.as_slice(),
-            1,
+            equations as i32,
             &mut forces.as_mut_slice(),
             1,
         );
-        eprintln!("dpotrf info {}", info);
-        *displacement_result = mem::transmute_copy(&forces);
     }
 
-    eprint!("Hello world");
-    // Solve the system with the Cholesky demcoposition mkl::potrs
-
-    // unsafe {
-    //    *c_double.offset(i as isize) = c[i];
-    // }
+    // Calculations are in place, so forces are now displacements.
+    {
+        let mut i = 0;
+        let mut j = 0;
+        for node in 0..node_count {
+            for dim in 0..2 {
+                let index = (node * 2 + dim) as isize;
+                if displacement_nodes.contains(&vec![node, dim]) {
+                    unsafe {
+                        *displacement_result.offset(index) = displacement_given[i];
+                    }
+                    i += 1;
+                } else {
+                    unsafe {
+                        *displacement_result.offset(index) = -forces[j];
+                    }
+                    j += 1;
+                }
+            }
+        }
+    }
 }
 
 fn safe_solve() {}
