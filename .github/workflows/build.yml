@@ -28,11 +28,11 @@ jobs:
     - name: Build Project
       run: |
         cd "${GITHUB_WORKSPACE}"
-        cargo build --no-default-features --features=accelerate --release
-        tar --exclude='target/release/build' cvfz release.tar.gz target/release/*
+        cargo build --release
+        tar --exclude='target/release/build' cvfz release.tar.xz target/release/*
 
     - name: Rust compiliation for Mac
       uses: actions/upload-artifact@v1
       with:
         name: release
-        path: release.tar.gz
+        path: release.tar.xz
