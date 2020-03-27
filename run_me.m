@@ -4,7 +4,7 @@
 % loading of these libraries should count towards my time?
 
 addpath('examples', 'matlab');
-library_path = 'target\debug\ferust';
+library_path = 'target\release\ferust';
 header_path = 'src\ferust.h';
 solver = Solver(library_path, header_path);
 
