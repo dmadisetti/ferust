@@ -51,34 +51,64 @@ end
 
 equations = nnd * 2 - length(disp_BC);
 K = zeros([equations, equations]);
-
-for e=element
+K2 = zeros([equations, equations]);
+F = zeros([equations, 1]);
+for e=element'
     k = local_stiffness(nodes(e, 1), nodes(e, 2), u, l, nen);
+    f = local_force(nodes(e, 1), nodes(e, 2), bforce, nen);
     gx = ID(e, 1);
     gy = ID(e, 2);
+    
+    ids = [gx ; gy];
+    ids = sort(ids(ids > 0));
+    kmask = false([equations, equations]);
+    kmask(ids, ids) = true;
+
+    gs = reshape([gx' ; gy'], [], 2 * nen)';
+    interleave = gs > 0;
+    F(gs(interleave)) = F(gs(interleave)) + f(interleave);
+
+    mask = (interleave .* interleave') == 1;
+    K2(kmask) = K2(kmask) + k(mask);%;, [], length(ids))';
     for ex = 1:nen
         gx0 = gx(ex) > 0;
-        if gx0
-            K(gx(ex), gx(ex)) = K(gx(ex), gx(ex)) + k(2 * ex - 1, 2 * ex - 1);
+        for ex1 = ex:nen
+            if gx0 && gx(ex1) > 0
+                K(gx(ex), gx(ex1)) = K(gx(ex), gx(ex1)) + k(2 * ex - 1, 2 * ex1 - 1);
+                K(gx(ex1), gx(ex)) = K(gx(ex), gx(ex1));
+            end
+        end
+        if ~gx0
+            bc = M(e(ex));
+            F(gs(interleave)) = F(gs(interleave)) ... % Previous force contributions
+                - k(interleave, ex) * bc(1); % discount displacement contribution
         end
         for ey = 1:nen
-            if gy(ey) > 0
+            gy0 = gy(ey) > 0;
+            if gy0
                 if ex == 1
-                    K(gy(ey), gy(ey)) = K(gy(ey), gy(ey)) + k(2 * ey, 2 * ey);
+                    for ey1 = ey:nen
+                        if gy0 && gy(ey1) > 0
+                            K(gy(ey), gy(ey1)) = K(gy(ey), gy(ey1)) + k(2 * ey, 2 * ey1);
+                            K(gy(ey1), gy(ey)) = K(gy(ey), gy(ey1));
+                        end
+                    end
                 end
                 if gx0
                     K(gx(ex), gy(ey)) = K(gx(ex), gy(ey)) + k(2 * ex, 2 * ey - 1);
                     K(gy(ey), gx(ex)) = K(gy(ey), gx(ex)) + k(2 * ex - 1, 2 * ey);
-                    %K(gx(ex), gy(ey) - 1) = K(gx(ex), gy(ey)) + k(2 * ex, 2 * ey - 1);
-                    %K(gx(ex) - 1, gy(ey)) = K(gy(ey), gx(ex)) + k(2 * ex - 1, 2 * ey);
                 end
+            elseif ex == 1
+                bc = M(e(ey));
+                F(gs(interleave)) = F(gs(interleave)) ... % Previous force contributions
+                    - k(interleave, ey) * bc(2); % discount displacement contribution
             end
         end
     end
 end
 
-%R = chol(K);
-%d = R\(R'\F);
+R = chol(K);
+d = R\(R'\F);
 
 % Now we can run our solver
 %handle = @() solver.solve(node, element, elemType, nel, nen, nIntPts, ...
