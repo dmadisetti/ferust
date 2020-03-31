@@ -21,13 +21,10 @@ def quad():
 
 
 def serindipity():
-    N1 = sympy.factor(
-        sympy.simplify(N(-1, -1) / 2 - (N(-e, -1) + N(-1, -n)) / 2))
-    N2 = sympy.factor(
-        sympy.simplify(N(1, -1) / 2 - (N(-e, -1) + N(1, -n)) / 2))
-    N3 = sympy.factor(sympy.simplify(N(1, 1) / 2 - (N(-e, 1) + N(1, -n)) / 2))
-    N4 = sympy.factor(
-        sympy.simplify(N(-1, 1) / 2 - (N(-e, 1) + N(-1, -n)) / 2))
+    N1 = N(-1, -1) / 2 - (N(-e, -1) + N(-1, -n)) / 2
+    N2 = N(1, -1) / 2 - (N(-e, -1) + N(1, -n)) / 2
+    N3 = N(1, 1) / 2 - (N(-e, 1) + N(1, -n)) / 2
+    N4 = N(-1, 1) / 2 - (N(-e, 1) + N(-1, -n)) / 2
     N5 = N(-e, -1)
     N6 = N(1, -n)
     N7 = N(-e, 1)
@@ -62,8 +59,10 @@ y0 = [S, T, U, V, W, X, Y, Z]
 D = [[l + 2 * u, l, 0], [l, l + 2 * u, 0], [0, 0, u]]
 
 
-def B(N):
-    return np.array([[N.diff(e), 0, N.diff(n)], [0, N.diff(n), N.diff(e)]]).T
+def B(N, x, y, J):
+    Nx = N.diff(e) * y.diff(n) - N.diff(n) * y.diff(e)
+    Ny = -N.diff(e) * x.diff(n) + N.diff(n) * x.diff(e)
+    return np.array([[Nx, 0, Ny], [0, Ny, Nx]]).T / J
 
 
 def format_code(K, padding=13, cols=80, initial_offset=4, sep=" ...\n    "):
@@ -109,7 +108,7 @@ def symbolic_equations(nodes, dim=2):
             # symmetric
             if i > j:
                 continue
-            k = np.matmul(np.matmul(B(Na).T, D), B(Nb)) / J
+            k = np.matmul(np.matmul(B(Na, x, y, J).T, D), B(Nb, x, y, J)) * J
             k = np.sum([
                 Wx * Wy * np.array(list(map(subs(Xe, Xn), k)))
                 for ((Xe, Xn), (Wx, Wy)) in zip(X, W)
@@ -135,6 +134,8 @@ def symbolic_equations(nodes, dim=2):
             }) for ((Xe, Xn), (Wx, Wy)) in zip(X, W)
         ])
 
+    # We put it in horner form since it is supposed to be one of the best forms
+    # for polynomial evaluation.
     K = list(map(lambda k: list(map(sympy.polys.polyfuncs.horner, k)), K))
     F = list(map(lambda f: list(map(sympy.polys.polyfuncs.horner, f)), F))
     return format_code(K), format_code(F)
@@ -151,7 +152,8 @@ def main():
                 {
                     "quad": quad_stiffness,
                     "serindipity": ""  #symbolic_stiffness(8)
-                }), file=file)
+                }),
+            file=file)
     # Generate our force equations.
     with open('matlab/local_force.m', 'w') as file:
         print(
