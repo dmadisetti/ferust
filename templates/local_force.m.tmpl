@@ -1,0 +1,23 @@
+function [F] = local_force(X, Y, body_force, local_nodes)
+  %local_force Calculates the local force for a given element and its
+  % type, using an appropriate integration method.
+  % NOTE: THIS IS GENERATED CODE. REFER TO local_force.m.tmpl
+  if local_nodes == 4
+      F = crunch_quad(X(1), X(2), X(3), X(4), ...
+                      Y(1), Y(2), Y(3), Y(4), body_force);
+  else
+      F = crunch_serindipity(X(1), X(2), X(3), X(4), ...
+                             X(5), X(6), X(7), X(8), ...
+                             Y(1), Y(2), Y(3), Y(4), ...
+                             Y(5), Y(6), Y(7), Y(8), body_force);
+  end
+end
+
+function [force] = crunch_quad(A, B, C, D, S, T, U, V, f)
+  force = [{{quad}}];
+end
+
+function [force] = crunch_serindipity(A, B, C, D, E, F, G, H, ...
+                                  S, T, U, V, W, X, Y, Z, f)
+  force = [{{serindipity}}];
+end
