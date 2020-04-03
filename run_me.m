@@ -10,13 +10,13 @@
 
 %% Solve for displacements
 % First we need to parse our input file
-filename = "Biaxial_Q4_2x2.txt";
+filename = "Beam_Bending_Q4_16x8_PU.txt";
 [nodes, element, elemType, nel, nen, nIntPts, nnd, ps, nu, E, ...
     Force_Node, bforce, disp_BC] = Read_input(filename);
 
 u = E / (2*(1 + nu));
 l = E * nu / ((1 + nu) * (1 - 2 * nu));
-l = (2 * l * u / (l + 2 * u));
+%l = (2 * l * u / (l + 2 * u));
 
 dims = cast(2, 'uint16');
 
@@ -58,18 +58,11 @@ for e=element'
     f = local_force(nodes(e, 1), nodes(e, 2), bforce, nen);
     gx = ID(e, 1);
     gy = ID(e, 2);
-    
-    ids = [gx ; gy];
-    ids = sort(ids(ids > 0));
-    kmask = false([equations, equations]);
-    kmask(ids, ids) = true;
-
     gs = reshape([gx' ; gy'], [], 2 * nen)';
+
     interleave = gs > 0;
     F(gs(interleave)) = F(gs(interleave)) + f(interleave);
 
-    mask = (interleave .* interleave') == 1;
-    K2(kmask) = K2(kmask) + k(mask);%;, [], length(ids))';
     for ex = 1:nen
         gx0 = gx(ex) > 0;
         for ex1 = ex:nen
@@ -81,7 +74,7 @@ for e=element'
         if ~gx0
             bc = M(e(ex));
             F(gs(interleave)) = F(gs(interleave)) ... % Previous force contributions
-                - k(interleave, ex) * bc(1); % discount displacement contribution
+                - k(interleave, ex * 2 - 1) * bc(1); % discount displacement contribution
         end
         for ey = 1:nen
             gy0 = gy(ey) > 0;
@@ -101,7 +94,7 @@ for e=element'
             elseif ex == 1
                 bc = M(e(ey));
                 F(gs(interleave)) = F(gs(interleave)) ... % Previous force contributions
-                    - k(interleave, ey) * bc(2); % discount displacement contribution
+                    - k(interleave, ey * 2) * bc(2); % discount displacement contribution
             end
         end
     end
@@ -109,6 +102,8 @@ end
 
 R = chol(K);
 d = R\(R'\F);
+
+find(1, ID)
 
 % Now we can run our solver
 %handle = @() solver.solve(node, element, elemType, nel, nen, nIntPts, ...
