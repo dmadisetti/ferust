@@ -10,13 +10,15 @@
 
 %% Solve for displacements
 % First we need to parse our input file
-filename = "Beam_Bending_Q4_16x8_PU.txt";
+filename = "Biaxial_Q4_2x2.txt";
 [nodes, element, elemType, nel, nen, nIntPts, nnd, ps, nu, E, ...
     Force_Node, bforce, disp_BC] = Read_input(filename);
 
 u = E / (2*(1 + nu));
 l = E * nu / ((1 + nu) * (1 - 2 * nu));
-%l = (2 * l * u / (l + 2 * u));
+if ps == 2 
+    l = (2 * l * u / (l + 2 * u));
+end
 
 dims = cast(2, 'uint16');
 
@@ -49,19 +51,22 @@ for node = 1:length(nodes)
     end
 end
 
-equations = nnd * 2 - length(disp_BC);
+equations = nnd * dim - length(disp_BC);
 K = zeros([equations, equations]);
-K2 = zeros([equations, equations]);
+gK = zeros([nnd * dim, nnd * dim]);
 F = zeros([equations, 1]);
+gF = zeros([nnd * dim, 1]);
+Mass = zeros([nnd * 3, nnd * 3]);
 for e=element'
-    k = local_stiffness(nodes(e, 1), nodes(e, 2), u, l, nen);
-    f = local_force(nodes(e, 1), nodes(e, 2), bforce, nen);
+    [k, f, m] = local_values(nodes(e, 1), nodes(e, 2), u, l, bforce, nen);
     gx = ID(e, 1);
     gy = ID(e, 2);
     gs = reshape([gx' ; gy'], [], 2 * nen)';
+    es = [(2*e -1)'; (2 * e)']';
 
     interleave = gs > 0;
     F(gs(interleave)) = F(gs(interleave)) + f(interleave);
+    gF(es) = gF(es) + f(interleave);
 
     for ex = 1:nen
         gx0 = gx(ex) > 0;
@@ -70,32 +75,47 @@ for e=element'
                 K(gx(ex), gx(ex1)) = K(gx(ex), gx(ex1)) + k(2 * ex - 1, 2 * ex1 - 1);
                 K(gx(ex1), gx(ex)) = K(gx(ex), gx(ex1));
             end
+            Mass(3*e(ex)-2:3*e(ex),3*e(ex1)-2:3*e(ex1)) = ...
+                Mass(3*e(ex)-2:3*e(ex),3*e(ex1)-2:3*e(ex1)) + ...
+                m(3*ex-2:3*ex, 3*ex1-2:3*ex1);
+            Mass(3*e(ex1)-2:3*e(ex1),3*e(ex)-2:3*e(ex)) = ...
+                Mass(3*e(ex)-2:3*e(ex),3*e(ex1)-2:3*e(ex1));
+            gK(2*e(ex) - 1, 2*e(ex1)-1) = gK(2*e(ex) - 1, 2*e(ex1) - 1) + k(2 * ex - 1, 2 * ex1 - 1);
+            gK(2*e(ex1), 2*e(ex)-1) = gK(2*e(ex) - 1, 2*e(ex1) - 1);
         end
+        % Partially assembled projection matrix
+        %P(3*e(ex)-2:3*e(ex), :) = P(3*e(ex)-2:3*e(ex), :) + p(3*ex-2:3*ex, :);
+        % Add the force contribution from the constrained x
         if ~gx0
             bc = M(e(ex));
             F(gs(interleave)) = F(gs(interleave)) ... % Previous force contributions
                 - k(interleave, ex * 2 - 1) * bc(1); % discount displacement contribution
         end
+
         for ey = 1:nen
             gy0 = gy(ey) > 0;
-            if gy0
-                if ex == 1
-                    for ey1 = ey:nen
-                        if gy0 && gy(ey1) > 0
-                            K(gy(ey), gy(ey1)) = K(gy(ey), gy(ey1)) + k(2 * ey, 2 * ey1);
-                            K(gy(ey1), gy(ey)) = K(gy(ey), gy(ey1));
-                        end
+            if ex == 1
+                for ey1 = ey:nen
+                    if gy0 && gy(ey1) > 0
+                        K(gy(ey), gy(ey1)) = K(gy(ey), gy(ey1)) + k(2 * ey, 2 * ey1);
+                        K(gy(ey1), gy(ey)) = K(gy(ey), gy(ey1));
                     end
+                    gK(2*e(ey), 2*e(ey1)) = gK(2*e(ey), 2*e(ey1)) + k(2 * ey, 2 * ey1);
+                    gK(2*e(ey1), 2*e(ey)) = gK(2*e(ey), 2*e(ey1));
                 end
-                if gx0
-                    K(gx(ex), gy(ey)) = K(gx(ex), gy(ey)) + k(2 * ex, 2 * ey - 1);
-                    K(gy(ey), gx(ex)) = K(gy(ey), gx(ex)) + k(2 * ex - 1, 2 * ey);
+                if ~gy0
+                    % Add the force contribution from the constrained y
+                    bc = M(e(ey));
+                    F(gs(interleave)) = F(gs(interleave)) ... % Previous force contributions
+                        - k(interleave, ey * 2) * bc(2); % discount displacement contribution
                 end
-            elseif ex == 1
-                bc = M(e(ey));
-                F(gs(interleave)) = F(gs(interleave)) ... % Previous force contributions
-                    - k(interleave, ey * 2) * bc(2); % discount displacement contribution
             end
+            if gx0 && gy0
+                K(gx(ex), gy(ey)) = K(gx(ex), gy(ey)) + k(2 * ex, 2 * ey - 1);
+                K(gy(ey), gx(ex)) = K(gy(ey), gx(ex)) + k(2 * ex - 1, 2 * ey);
+            end
+            gK(2*e(ex)-1, 2*e(ey)) = gK(2*e(ex)-1, 2*e(ey)) + k(2 * ex, 2 * ey - 1);
+            gK(2*e(ey), 2*e(ex)-1) = gK(2*e(ey), 2*e(ex)-1) + k(2 * ex - 1, 2 * ey);
         end
     end
 end
@@ -103,10 +123,21 @@ end
 R = chol(K);
 d = R\(R'\F);
 
-find(1, ID)
+disp = zeros([nnd, dim]);
+disp(ID > 0) = d(ID(ID > 0));
+for n = 1:nnd
+    for ds = 1:dim
+        if ID(n, ds) == 0
+            m = M(n);
+            disp(n, ds) = m(ds);
+        end
+    end
+end
 
-% Now we can run our solver
-%handle = @() solver.solve(node, element, elemType, nel, nen, nIntPts, ...
-%    nnd, ps, nu, E, Force_Node, bforce, disp_BC);
-%timeit(handle)
-%disp("If it ran, we're probably good :)");
+for e=element'
+    P(reshape(((3*e-3) + uint32(1:3))', [], 1)) = P(reshape(((3*e-3) + uint32(1:3))', [], 1)) + ... 
+        local_projection(nodes(e,1), nodes(e,2), disp(e, :), u, l, nen)';
+end
+
+stresses = Mass\P;
+reaction = gK * disp - gF;
