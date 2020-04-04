@@ -10,9 +10,6 @@ import sympy as sympy2
 from multiprocessing import Pool
 import pdb
 
-# Reaction forces
-# Prelude and questions
-
 # Define loose variables
 (  # General system variables
     n, e, h, f, l, u, h,
@@ -26,6 +23,7 @@ import pdb
 
 # using the shape function convention in #5
 N = lambda E, N: ((1 + e * E) * (1 + n * N)) / 2
+
 
 def horner(K):
     # Something I was prototyping but eventually scrapped.
@@ -93,9 +91,8 @@ weight_lookup = {4: 4, 8: 9, 9: 9}
 
 x0 = [A, B, C, D, E, F, G, H, I]
 y0 = [R, S, T, U, V, W, X, Y, Z]
-disp = [
-    tuple(var(f"d{i}{['X', 'Y'][j]}") for j in range(2)) for i in range(9)
-]
+disp = [tuple(var(f"d{i}{['X', 'Y'][j]}") for j in range(2)) for i in range(9)]
+placeholder = [var(f"d{i}") for i in range(9)]
 
 # We only do the plane strain case
 D = [[l + 2 * u, l, 0], [l, l + 2 * u, 0], [0, 0, u]]
@@ -123,7 +120,7 @@ def format_code(code,
     K = code
     code = code.replace("{", "[").replace("}", "]").replace(".*", "*").replace(
         "], [", "; ").replace("**", "^").replace(".^", "^")
-    code = re.sub("\s", "", code)
+    #code = re.sub("\s", "", code)
     code = re.sub("sqrt\(", "&", code)
     MATCH_REGEX = "([dx]?[0-9e\.-]+[XY]?)"
     matches = re.findall(MATCH_REGEX, code)
@@ -136,9 +133,26 @@ def format_code(code,
     return code.replace('?', "{}").format(*matches).replace("&", "sqrt(")
 
 
-def symbolic_equations(nodes, dim=2):
+def symbolic_interpolation(nodes):
+    Ns = shapes[nodes]()
+    x = sum([n * x_ for n, x_ in zip(Ns, x0[:nodes])])
+    y = sum([n * y_ for n, y_ in zip(Ns, y0[:nodes])])
+
+    J = (sympy.diff(x, e) * sympy.diff(y, n) -
+         sympy.diff(x, n) * sympy.diff(y, e)).expand()
+
+    s = sum([
+            N * interp * J
+            for N, interp in zip(Ns, placeholder[:nodes])
+        ])
+    s = factor(s)
+    return format_code(sympy2.octave_code(s), convert=False, cols=90)
+
+
+def symbolic_equations(nodes, weights=0, dim=2):
     stress_components = {1: 1, 2: 3, 3: 6}[dim]
-    weights = weight_lookup[nodes]
+    if not weights:
+        weights = weight_lookup[nodes]
 
     Ns = shapes[nodes]()
     x = sum([n * x_ for n, x_ in zip(Ns, x0[:nodes])])
@@ -147,7 +161,6 @@ def symbolic_equations(nodes, dim=2):
     J = (sympy.diff(x, e) * sympy.diff(y, n) -
          sympy.diff(x, n) * sympy.diff(y, e)).expand()
 
-    print(disp)
     stress = np.reshape(
         sum([
             np.matmul(np.matmul(D, B(N, x, y, J)), (dx, dy))
@@ -223,8 +236,6 @@ def symbolic_equations(nodes, dim=2):
 
         # We can also set up our projection vector
         p = Na * stress * J
-        print(p.shape)
-        print(p)
         P[stress_components * i:stress_components * i +
           stress_components] = sum([
               Wx * Wy * np.array(list(map(subs(Xe, Xn), p)))
@@ -239,8 +250,6 @@ def symbolic_equations(nodes, dim=2):
         list(map(lambda f: list(map(sympy2.polys.polyfuncs.horner, f)),
                  F))).T[0]
     P = list(map(factor, np.reshape(P, (1, -1))[0]))
-    print(len(P))
-    pdb.set_trace()
     precompute, reduced = cse(np.concatenate((K, M, F)))
     precomputeP, reducedP = cse(P)
 
@@ -264,32 +273,48 @@ def symbolic_equations(nodes, dim=2):
     K=[{}];
     F=[{}]\';
     M=[{}];""".format(format_code(code, convert=False), format_code(K),
-                        format_coede(F, trim=1),
-                       format_code(M)), """
+                      format_code(F, trim=1), format_code(M)), """
     {};
-    P=[{}];""".format(format_code(codeP,convert=False), format_code(reducedP, trim=1))
+    P=[{}];""".format(format_code(codeP, convert=False),
+                      format_code(reducedP, trim=1))
 
 
 def main():
     renderer = pystache.Renderer()
-    quad, qp = symbolic_equations(4)
-    serindipity, qs = symbolic_equations(8)
-    bubble, qb = symbolic_equations(9)
-    # Generate our stiffness equations.
-    with open('matlab/local_values.m', 'w') as file:
-        print(renderer.render_path("templates/local_values.m.tmpl", {
+
+    quad = symbolic_interpolation(4)
+    serindipity = symbolic_interpolation(8)
+    bubble = symbolic_interpolation(9)
+    with open(f"matlab/local_interpolation.m", 'w') as file:
+        print(renderer.render_path("templates/local_interpolation.m.tmpl", {
             "quad": quad,
             "serindipity": serindipity,
             "bubble": bubble,
         }),
               file=file)
-    with open('matlab/local_projection.m', 'w') as file:
-        print(renderer.render_path("templates/local_projection.m.tmpl", {
-            "quad": qp,
-            "serindipity": qs,
-            "bubble": qb,
-        }),
-              file=file)
+    for weights in [4, 9]:
+        quad, qp = symbolic_equations(4, weights=weights)
+        serindipity, qs = symbolic_equations(8, weights=weights)
+        bubble, qb = symbolic_equations(9, weights=weights)
+        # Generate our stiffness equations.
+        with open(f"matlab/local_values_{weights}.m", 'w') as file:
+            print(renderer.render_path(
+                "templates/local_values.m.tmpl", {
+                    "integration": weights,
+                    "quad": quad,
+                    "serindipity": serindipity,
+                    "bubble": bubble,
+                }),
+                  file=file)
+        with open(f"matlab/local_projection_{weights}.m", 'w') as file:
+            print(renderer.render_path(
+                "templates/local_projection.m.tmpl", {
+                    "integration": weights,
+                    "quad": qp,
+                    "serindipity": qs,
+                    "bubble": qb,
+                }),
+                  file=file)
 
 
 if __name__ == "__main__":

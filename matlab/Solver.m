@@ -1,12 +1,31 @@
 classdef Solver < handle
     properties (SetAccess = private)
-        displacements
-        forces
+        nodes         % [n x dim] List of nodes taken from the input file
+        elements      % [elements x elements per node] Elements taken from the input file
+        integration   % [1] Order of Gaussian integration
+        bforce        % [1] body force in the y direction
+        mu            % [1] Calculated shear modulus
+        lame          % [1] Calculated lame constant
+        K             % [dof x dof] System Stiffness Matrix
+        gK            % [dim * nodes x dim * nodes] Global Stiffness Matrix
+        force         % [dof x 1] System Force Vector
+        bForce        % [dim * nodes x 1] Global body force vector
+        Mass          % [stress_components * nodes x stress_components * nodes] Global Mass Matrix
+        projection    % [stress_components * nodes x 1] Global projection vector
+        displacements % [nodes x dim] Calculated displacement of solver.nodes
+        stresses      % [stress_components * nodes x 1] Calculated stresses at nodes
+        reaction      % [nodes x dim] Calculated reaction forces at nodes.
+        node_reaction % Calculated reaction forces at constrained nodes.
+        reaction_sum  % [dim x 1] Of the sum of the reaction forces in X and Y
+    end
+    properties (Constant = true)
+        dims = cast(2, 'uint16');
+        stress_components = cast(3, 'uint16');
     end
     methods
         function solver = Solver(filename)
             % First we need to parse our input file
-            [nodes, element, ~, ~, nen, ~, nnd, ps, nu, E, ...
+            [nodes, element, ~, ~, nen, integration, nnd, ps, nu, E, ...
                 Force_Node, bforce, disp_BC] = Read_input(filename);
             
             % We set our plane strain condition
@@ -16,108 +35,185 @@ classdef Solver < handle
                 l = (2 * l * u / (l + 2 * u));
             end
             
-            % initialize our data
-            dims = cast(2, 'uint16');
-            stress_components = cast(3, 'uint16');
-            equations = nnd * dims - length(disp_BC);
-            K = zeros([equations, equations]);
-            gK = zeros([nnd * dims, nnd * dims]);
-            F = zeros([equations, 1]);
-            bF = zeros([nnd * dims, 1]);
-            Mass = zeros([nnd * stress_components, nnd * stress_components]);
-            P = zeros([nnd * stress_components, 1]);
-            disp = zeros([nnd, dims]);
-            ID = zeros([length(nodes) dims], 'uint16');
+            % Bind provided to instance
+            solver.nodes = nodes;
+            solver.elements = element;
+            solver.integration = integration;
+            solver.bforce = bforce;
+            solver.mu = u;
+            solver.lame = l;
             
-            M = build_map(disp_BC);
+            % Initialize our data with 0s
+            equations = nnd * solver.dims - length(disp_BC);
+            solver.K = zeros([equations, equations]);
+            solver.gK = zeros([nnd * solver.dims, nnd * solver.dims]);
+            solver.force = zeros([equations, 1]);
+            solver.bForce = zeros([nnd * solver.dims, 1]);
+            solver.Mass = zeros([nnd * solver.stress_components, ...
+                nnd * solver.stress_components]);
+            solver.projection = zeros([nnd * solver.stress_components, 1]);
+            solver.displacements = zeros([nnd, solver.dims]);
             
-            build_id();
+            % Build useful data structures. Note, we opt not to use a LM
+            % array, but make extensive usage of the ID array, in addition
+            % to a map M for boundary condition lookup.
+            M = solver.build_map(solver.dims, disp_BC);
+            ID = solver.build_id(M, solver.dims, nnd);
             
+            solver.crunch_local_data(ID, M, nen);
+            
+            % With a set K matrix and forces, we can solve for our
+            % displacements. Since K is garunteed to be positive definite
+            % we solve using Choleksy as a speed up method. There are
+            % method for banded solves,s including from our own department!
+            % See Hang Lui, R. Mitall 2013, IEEE, GPU-accelerated
+            % scalable solver for banded linear systems
+            % This is also a great sanity check, since this line fails if K
+            % is not positive def.
+            % R = chol(solver.K);
+            % d = R\(R'\solver.force);
+            d = solver.K\solver.force;
+
+            % We now need to massage our local d to a global context.
+            solver.contextulize_d(d, ID, M);
+            
+            % For stresses, we now need a projection vector, dependent on
+            % the displacements just calculated.
             for e=element'
-                [k, f, m] = local_values(nodes(e, 1), nodes(e, 2), u, l, bforce, nen);
+                % Add up the projection contribution from each element
+                solver.projection(reshape(((3*e-3) + uint32(1:3))', [], 1)) = ...
+                    solver.projection(reshape(((3*e-3) + uint32(1:3))', [], 1)) + ...
+                    local_projection(nodes(e,1), nodes(e,2), solver.displacements(e, :), ...
+                    u, l, nen, solver.integration)';
+            end
+            
+            % We can finally solve for our stresses
+            R = chol(solver.Mass);
+            solver.stresses = R\(R'\solver.projection);
+            
+            % And thus our reaction forces.
+            solver.reaction = solver.gK * reshape(solver.displacements', [], 1) ...
+                - solver.bForce;
+            % Including the reactions specifically asked for.
+            solver.node_reaction = [solver.reaction(2 * Force_Node - 1) ...
+                solver.reaction(2 * Force_Node)];
+            solver.reaction_sum = [sum(solver.node_reaction(:, 1)) ...
+                sum(solver.node_reaction(:, 1))]';
+        end
+    end
+    methods(Access = private, Hidden = true, Sealed = true)
+        function crunch_local_data(solver, ID, M, nen)
+            for e=solver.elements'
+                % Compute Stifffness, Local Force and local Mass in one
+                % Fell swoop.
+                [k, f, m] = local_values(solver.nodes(e, 1), ...
+                    solver.nodes(e, 2), ...
+                    solver.mu, solver.lame, ...
+                    solver.bforce, nen, ...
+                    solver.integration);
+                % Provide indices for the solution K matrix.
                 gx = ID(e, 1);
                 gy = ID(e, 2);
                 gs = reshape([gx' ; gy'], [], 2 * nen)';
-                es = reshape([(2*e -1)'; (2 * e)'], [], 2 * nen)';
+                % Provide indices for the global K matrix.
+                es = reshape([(2 * e -1)'; (2 * e)'], [], 2 * nen)';
                 
+                % Aggregate contribution to the solvable equations.
                 interleave = gs > 0;
-                F(gs(interleave)) = F(gs(interleave)) + f(interleave);
-                bF(es) = bF(es) + f;
+                solver.force(gs(interleave)) = ...
+                    solver.force(gs(interleave)) + f(interleave);
+                % Record the global body force felt.
+                solver.bForce(es) = solver.bForce(es) + f;
                 
+                % We examine every x vs x, y vs y and x vs y of the element
+                % and record the pertinent data.
                 for ex = 1:nen
                     gx0 = gx(ex) > 0;
+                    % x vs x
                     for ex1 = ex:nen
                         if gx0 && gx(ex1) > 0
-                            K(gx(ex), gx(ex1)) = K(gx(ex), gx(ex1)) + k(2 * ex - 1, 2 * ex1 - 1);
-                            K(gx(ex1), gx(ex)) = K(gx(ex), gx(ex1));
+                            solver.K(gx(ex), gx(ex1)) = ...
+                                solver.K(gx(ex), gx(ex1)) ...
+                                + k(2 * ex - 1, 2 * ex1 - 1);
+                            % Symmetry of K lets us just flip the result.
+                            solver.K(gx(ex1), gx(ex)) = ...
+                                solver.K(gx(ex), gx(ex1));
                         end
-                        Mass(3*e(ex)-2:3*e(ex),3*e(ex1)-2:3*e(ex1)) = ...
-                            Mass(3*e(ex)-2:3*e(ex),3*e(ex1)-2:3*e(ex1)) + ...
+                        % Compute Mass x vs x contribution
+                        solver.Mass(3*e(ex)-2:3*e(ex),3*e(ex1)-2:3*e(ex1)) = ...
+                            solver.Mass(3*e(ex)-2:3*e(ex),3*e(ex1)-2:3*e(ex1)) + ...
                             m(3*ex-2:3*ex, 3*ex1-2:3*ex1);
-                        Mass(3*e(ex1)-2:3*e(ex1),3*e(ex)-2:3*e(ex)) = ...
-                            Mass(3*e(ex)-2:3*e(ex),3*e(ex1)-2:3*e(ex1));
-                        gK(2*e(ex) - 1, 2*e(ex1) - 1) = gK(2*e(ex) - 1, 2*e(ex1) - 1) + k(2 * ex - 1, 2 * ex1 - 1);
-                        gK(2*e(ex1)- 1, 2*e(ex) - 1) = gK(2*e(ex) - 1, 2*e(ex1) - 1);
+                        % Mass is also symmetric.
+                        solver.Mass(3*e(ex1)-2:3*e(ex1),3*e(ex)-2:3*e(ex)) = ...
+                            solver.Mass(3*e(ex)-2:3*e(ex),3*e(ex1)-2:3*e(ex1));
+                        
+                        % Record global stiffness contribution.
+                        solver.gK(2*e(ex) - 1, 2*e(ex1) - 1) = ...
+                            solver.gK(2*e(ex) - 1, 2*e(ex1) - 1) + k(2 * ex - 1, 2 * ex1 - 1);
+                        solver.gK(2*e(ex1)- 1, 2*e(ex) - 1) = solver.gK(2*e(ex) - 1, 2*e(ex1) - 1);
                     end
                     % Add the force contribution from the constrained x
                     if ~gx0
                         bc = M(e(ex));
-                        F(gs(interleave)) = F(gs(interleave)) ... % Previous force contributions
+                        solver.force(gs(interleave)) = ...
+                            solver.force(gs(interleave)) ... % Previous force contributions
                             - k(interleave, ex * 2 - 1) * bc(1); % discount displacement contribution
                     end
                     
+                    % x v y and y v y contributions
                     for ey = 1:nen
                         gy0 = gy(ey) > 0;
+                        % Check to make sure we only capture y v y once.
                         if ex == 1
                             for ey1 = ey:nen
                                 if gy0 && gy(ey1) > 0
-                                    K(gy(ey), gy(ey1)) = K(gy(ey), gy(ey1)) + k(2 * ey, 2 * ey1);
-                                    K(gy(ey1), gy(ey)) = K(gy(ey), gy(ey1));
+                                    solver.K(gy(ey), gy(ey1)) = ...
+                                        solver.K(gy(ey), gy(ey1)) + k(2 * ey, 2 * ey1);
+                                    solver.K(gy(ey1), gy(ey)) = ...
+                                        solver.K(gy(ey), gy(ey1));
                                 end
-                                gK(2*e(ey), 2*e(ey1)) = gK(2*e(ey), 2*e(ey1)) + k(2 * ey, 2 * ey1);
-                                gK(2*e(ey1), 2*e(ey)) = gK(2*e(ey), 2*e(ey1));
+                                solver.gK(2*e(ey), 2*e(ey1)) = ...
+                                    solver.gK(2*e(ey), 2*e(ey1)) + k(2 * ey, 2 * ey1);
+                                solver.gK(2*e(ey1), 2*e(ey)) = ...
+                                    solver.gK(2*e(ey), 2*e(ey1));
                             end
                             if ~gy0
                                 % Add the force contribution from the constrained y
                                 bc = M(e(ey));
-                                F(gs(interleave)) = F(gs(interleave)) ... % Previous force contributions
+                                solver.force(gs(interleave)) = ...
+                                    solver.force(gs(interleave)) ... % Previous force contributions
                                     - k(interleave, ey * 2) * bc(2); % discount displacement contribution
                             end
                         end
+                        % Capture cross contributions, x v y and y v x
                         if gx0 && gy0
-                            K(gx(ex), gy(ey)) = K(gx(ex), gy(ey)) + k(2 * ex, 2 * ey - 1);
-                            K(gy(ey), gx(ex)) = K(gy(ey), gx(ex)) + k(2 * ex - 1, 2 * ey);
+                            solver.K(gx(ex), gy(ey)) = ...
+                                solver.K(gx(ex), gy(ey)) + k(2 * ex, 2 * ey - 1);
+                            solver.K(gy(ey), gx(ex)) = ...
+                                solver.K(gx(ex), gy(ey));
                         end
-                        gK(2*e(ex)-1, 2*e(ey)) = gK(2*e(ex)-1, 2*e(ey)) + k(2 * ex - 1, 2 * ey);
-                        gK(2*e(ey), 2*e(ex)-1) = gK(2*e(ex)-1, 2*e(ey));
+                        solver.gK(2*e(ex)-1, 2*e(ey)) = ...
+                            solver.gK(2*e(ex)-1, 2*e(ey)) + k(2 * ex - 1, 2 * ey);
+                        solver.gK(2*e(ey), 2*e(ex)-1) = ...
+                            solver.gK(2*e(ex)-1, 2*e(ey));
                     end
                 end
             end
-            
-            R = chol(K);
-            d = R\(R'\F);
-            
-            disp(ID > 0) = d(ID(ID > 0));
-            for n = 1:nnd
-                for ds = 1:dim
+        end
+        function contextulize_d(solver, d, ID, M)
+            solver.displacements(ID > 0) = d(ID(ID > 0));
+            for n = 1:length(solver.nodes)
+                for ds = 1:solver.dims
                     if ID(n, ds) == 0
                         m = M(n);
-                        disp(n, ds) = m(ds);
+                        solver.displacements(n, ds) = m(ds);
                     end
                 end
             end
-            
-            for e=element'
-                P(reshape(((3*e-3) + uint32(1:3))', [], 1)) = P(reshape(((3*e-3) + uint32(1:3))', [], 1)) + ...
-                    local_projection(nodes(e,1), nodes(e,2), disp(e, :), u, l, nen)';
-            end
-            
-            stresses = Mass\P;
-            reaction = gK * reshape(disp', [], 1) - bF;
-            force_node_reaction = [reaction(2 * Force_Node - 1) reaction(2 * Force_Node)];
-            reaction_sum = [sum(force_node_reaction(:, 1)) sum(force_node_reaction(:, 1))]';
         end
-        function M = build_map(disp_BC, dims)
+    end
+    methods(Static, Access = private, Hidden = true, Sealed = true)
+        function M = build_map(dims, disp_BC)
             bc_nodes = cast(disp_BC(:, 1), 'uint16');
             M = containers.Map(bc_nodes, ...
                 mat2cell( ...
@@ -129,9 +225,10 @@ classdef Solver < handle
                 M(row(1)) = m;
             end
         end
-        function build_id()
+        function ID = build_id(M, dims, nnd)
+            ID = zeros([nnd dims], 'uint16');
             id = 1;
-            for node = 1:length(nodes)
+            for node = 1:nnd
                 if ~M.isKey(node)
                     ID(node, 1:dims) = id:id + dims - 1;
                     id = id + dims;
@@ -145,6 +242,55 @@ classdef Solver < handle
                     end
                 end
             end
+        end
+    end
+    methods(Access = public, Sealed = true)
+        function stress_fn = get_interpolate_stress_fn(solver, element)
+            e = solver.elements(element, :);
+            xx = local_interpolation(solver.nodes(e, 1), ...
+                solver.nodes(e, 2), ...
+                solver.stresses(3 * e - 2), length(e));
+            yy = local_interpolation(solver.nodes(e, 1), ...
+                solver.nodes(e, 2), ...
+                solver.stresses(3 * e - 1), length(e));
+            xy = local_interpolation(solver.nodes(e, 1), ...
+                solver.nodes(e, 2), ...
+                solver.stresses(3 * e), length(e));
+            stress_fn = @(x, y) [xx(x ,y) yy(x ,y) xy(x ,y)];
+        end
+        function stress = interpolate_stress(solver, x, y)
+            i = 1;
+            for e = solver.elements'
+                if inpolygon(x, y, solver.nodes(e, 1), solver.nodes(e, 2))
+                    stress_fn = get_interpolate_stress_fn(i);
+                    stress = stress_fn(x, y);
+                    return;
+                end
+                i = i + 1;
+            end
+            stress = NaN(solver.stress_components);
+        end
+        function displacement_fn = get_interpolate_displacement_fn(solver, element)
+            e = solver.elements(element);
+            X = local_interpolation(solver.nodes(e, 1), ...
+                solver.nodes(e, 2), ...
+                solver.displacements(2 * e - 1), length(e));
+            Y = local_interpolation(solver.nodes(e, 1), ...
+                solver.nodes(e, 2), ...
+                solver.displacements(2 * e), length(e));
+            displacement_fn = @(x, y) [X(x ,y) Y(x ,y)];
+        end
+        function displacement = interpolate_displacement(solver, x, y)
+            i = 1;
+            for e = solver.elements'
+                if inpolygon(x, y, solver.nodes(e, 1), solver.nodes(e, 2))
+                    displacement_fn = get_interpolate_displacement_fn(i);
+                    displacement = displacement_fn(x, y);
+                    return;
+                end
+                i = i + 1;
+            end
+            displacement = NaN(solver.dims);
         end
     end
 end
