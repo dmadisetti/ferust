@@ -4,8 +4,6 @@
 % loading of these libraries should count towards my time?
 
 %addpath('examples', 'matlab');
-%library_path = 'target\debug\ferust';
-%header_path = 'src\ferust.h';
 %solver = Solver(library_path, header_path);
 
 %% Solve for displacements
@@ -21,6 +19,15 @@ if ps == 2
 end
 
 dims = cast(2, 'uint16');
+stress_components = cast(3, 'uint16');
+equations = nnd * dims - length(disp_BC);
+K = zeros([equations, equations]);
+gK = zeros([nnd * dims, nnd * dims]);
+F = zeros([equations, 1]);
+bF = zeros([nnd * dims, 1]);
+Mass = zeros([nnd * stress_components, nnd * stress_components]);
+P = zeros([nnd * stress_components, 1]);
+disp = zeros([nnd, dims]);
 
 bc_nodes = cast(disp_BC(:, 1), 'uint16');
 M = containers.Map(bc_nodes, ...
@@ -51,22 +58,16 @@ for node = 1:length(nodes)
     end
 end
 
-equations = nnd * dim - length(disp_BC);
-K = zeros([equations, equations]);
-gK = zeros([nnd * dim, nnd * dim]);
-F = zeros([equations, 1]);
-gF = zeros([nnd * dim, 1]);
-Mass = zeros([nnd * 3, nnd * 3]);
 for e=element'
     [k, f, m] = local_values(nodes(e, 1), nodes(e, 2), u, l, bforce, nen);
     gx = ID(e, 1);
     gy = ID(e, 2);
     gs = reshape([gx' ; gy'], [], 2 * nen)';
-    es = [(2*e -1)'; (2 * e)']';
+    es = reshape([(2*e -1)'; (2 * e)'], [], 2 * nen)';
 
     interleave = gs > 0;
     F(gs(interleave)) = F(gs(interleave)) + f(interleave);
-    gF(es) = gF(es) + f(interleave);
+    bF(es) = bF(es) + f;
 
     for ex = 1:nen
         gx0 = gx(ex) > 0;
@@ -80,11 +81,9 @@ for e=element'
                 m(3*ex-2:3*ex, 3*ex1-2:3*ex1);
             Mass(3*e(ex1)-2:3*e(ex1),3*e(ex)-2:3*e(ex)) = ...
                 Mass(3*e(ex)-2:3*e(ex),3*e(ex1)-2:3*e(ex1));
-            gK(2*e(ex) - 1, 2*e(ex1)-1) = gK(2*e(ex) - 1, 2*e(ex1) - 1) + k(2 * ex - 1, 2 * ex1 - 1);
-            gK(2*e(ex1), 2*e(ex)-1) = gK(2*e(ex) - 1, 2*e(ex1) - 1);
+            gK(2*e(ex) - 1, 2*e(ex1) - 1) = gK(2*e(ex) - 1, 2*e(ex1) - 1) + k(2 * ex - 1, 2 * ex1 - 1);
+            gK(2*e(ex1)- 1, 2*e(ex) - 1) = gK(2*e(ex) - 1, 2*e(ex1) - 1);
         end
-        % Partially assembled projection matrix
-        %P(3*e(ex)-2:3*e(ex), :) = P(3*e(ex)-2:3*e(ex), :) + p(3*ex-2:3*ex, :);
         % Add the force contribution from the constrained x
         if ~gx0
             bc = M(e(ex));
@@ -114,8 +113,8 @@ for e=element'
                 K(gx(ex), gy(ey)) = K(gx(ex), gy(ey)) + k(2 * ex, 2 * ey - 1);
                 K(gy(ey), gx(ex)) = K(gy(ey), gx(ex)) + k(2 * ex - 1, 2 * ey);
             end
-            gK(2*e(ex)-1, 2*e(ey)) = gK(2*e(ex)-1, 2*e(ey)) + k(2 * ex, 2 * ey - 1);
-            gK(2*e(ey), 2*e(ex)-1) = gK(2*e(ey), 2*e(ex)-1) + k(2 * ex - 1, 2 * ey);
+            gK(2*e(ex)-1, 2*e(ey)) = gK(2*e(ex)-1, 2*e(ey)) + k(2 * ex - 1, 2 * ey);
+            gK(2*e(ey), 2*e(ex)-1) = gK(2*e(ex)-1, 2*e(ey));
         end
     end
 end
@@ -123,7 +122,6 @@ end
 R = chol(K);
 d = R\(R'\F);
 
-disp = zeros([nnd, dim]);
 disp(ID > 0) = d(ID(ID > 0));
 for n = 1:nnd
     for ds = 1:dim
@@ -140,4 +138,6 @@ for e=element'
 end
 
 stresses = Mass\P;
-reaction = gK * disp - gF;
+reaction = gK * reshape(disp', [], 1) - bF;
+force_node_reaction = [reaction(2 * Force_Node - 1) reaction(2 * Force_Node)];
+reaction_sum = [sum(force_node_reaction(:, 1)) sum(force_node_reaction(:, 1))]';

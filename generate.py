@@ -10,22 +10,25 @@ import sympy as sympy2
 from multiprocessing import Pool
 import pdb
 
+# Reaction forces
+# Prelude and questions
+
 # Define loose variables
 (  # General system variables
     n, e, h, f, l, u, h,
-    # Loose variables for X_0 -> X_8
-    A, B, C, D, E, F, G, H,
-    # Loose Variables for Y_0 -> Y_8
-    S, T, U, V, W, X, Y, Z
+    # Loose variables for X_0 -> X_9
+    A, B, C, D, E, F, G, H, I,
+    # Loose Variables for Y_0 -> Y_9
+    R, S, T, U, V, W, X, Y, Z,
 ) = var("n, e, h, f, l, u, h,"
-             "A, B, C, D, E, F, G, H, S,"
-             "T, U, V, W, X, Y, Z")
+        "A, B, C, D, E, F, G, H, I,"
+        "R, S, T, U, V, W, X, Y, Z")
 
 # using the shape function convention in #5
 N = lambda E, N: ((1 + e * E) * (1 + n * N)) / 2
 
-
 def horner(K):
+    # Something I was prototyping but eventually scrapped.
     # symbols = list(sorted(K.free_symbols))
     # k = expand(expand(K))
     # P = np.array([[
@@ -52,29 +55,23 @@ def quad():
     return [N1, N2, N3, N4]
 
 
-def serindipity():
-    N1 = N(-1, -1) / 2 - (N(-e, -1) + N(-1, -n)) / 2
-    N2 = N(1, -1) / 2 - (N(-e, -1) + N(1, -n)) / 2
-    N3 = N(1, 1) / 2 - (N(-e, 1) + N(1, -n)) / 2
-    N4 = N(-1, 1) / 2 - (N(-e, 1) + N(-1, -n)) / 2
-    N5 = N(-e, -1)
-    N6 = N(1, -n)
-    N7 = N(-e, 1)
-    N8 = N(-1, -n)
-    return [N1, N2, N3, N4, N5, N6, N7, N8]
-
-
-def bubble():
-    N9 = N(-e, -1)
-    N5 = N(-e, -1) - N9
-    N6 = N(1, -n) - N9
-    N7 = N(-e, 1) - N9
-    N8 = N(-1, -n) - N9
-    N1 = N(-1, -1) / 2 - (N(-e, -1) + N(-1, -n)) / 2
-    N2 = N(1, -1) / 2 - (N(-e, -1) + N(1, -n)) / 2
-    N3 = N(1, 1) / 2 - (N(-e, 1) + N(1, -n)) / 2
-    N4 = N(-1, 1) / 2 - (N(-e, 1) + N(-1, -n)) / 2
+def bubble(N5=True, N6=True, N7=True, N8=True, N9=True):
+    (N1, N2, N3, N4) = quad()
+    N9 = int(N9) * N(-e, -n)
+    N5 = int(N5) * (N(-e, -1) - N9 / 2)
+    N6 = int(N6) * (N(1, -n) - N9 / 2)
+    N7 = int(N7) * (N(-e, 1) - N9 / 2)
+    N8 = int(N8) * (N(-1, -n) - N9 / 2)
+    N1 -= (N5 + N8) / 2 - N9 / 4
+    N2 -= (N5 + N6) / 2 - N9 / 4
+    N3 -= (N6 + N7) / 2 - N9 / 4
+    N4 -= (N7 + N8) / 2 - N9 / 4
     return [N1, N2, N3, N4, N5, N6, N7, N8, N9]
+
+
+def serindipity(N5=True, N6=True, N7=True, N8=True):
+    Ns = bubble(N5=N5, N6=N6, N7=N7, N8=N8, N9=False)
+    return Ns[:8]
 
 
 combination = lambda *a: list(product(a, a))
@@ -94,8 +91,11 @@ integration_weights = {
 }
 weight_lookup = {4: 4, 8: 9, 9: 9}
 
-x0 = [A, B, C, D, E, F, G, H]
-y0 = [S, T, U, V, W, X, Y, Z]
+x0 = [A, B, C, D, E, F, G, H, I]
+y0 = [R, S, T, U, V, W, X, Y, Z]
+disp = [
+    tuple(var(f"d{i}{['X', 'Y'][j]}") for j in range(2)) for i in range(9)
+]
 
 # We only do the plane strain case
 D = [[l + 2 * u, l, 0], [l, l + 2 * u, 0], [0, 0, u]]
@@ -109,22 +109,25 @@ def B(N, x, y, J):
 
 def format_code(code,
                 convert=True,
+                trim=2,
                 padding=13,
-                cols=80,
+                cols=50,
                 initial_offset=4,
                 sep=" ...\n    "):
     inner_width = cols - padding
     initial_width = inner_width - initial_offset
 
     if convert:
-        code = sympy2.octave_code(code)[2:-2]
+        code = sympy2.octave_code(code)[trim:-trim]
 
+    K = code
     code = code.replace("{", "[").replace("}", "]").replace(".*", "*").replace(
         "], [", "; ").replace("**", "^").replace(".^", "^")
-    matches = re.findall("([dx]?[0-9]+[xy]?)", code)
-    code = re.sub("sqrt\(", "&", code)
     code = re.sub("\s", "", code)
-    code = re.sub("([dx]?[0-9]+)[xy]?", "?", code)
+    code = re.sub("sqrt\(", "&", code)
+    MATCH_REGEX = "([dx]?[0-9e\.-]+[XY]?)"
+    matches = re.findall(MATCH_REGEX, code)
+    code = re.sub(MATCH_REGEX, "?", code)
 
     code = code[:initial_width] + sep + sep.join([
         code[i:i + inner_width]
@@ -134,6 +137,9 @@ def format_code(code,
 
 
 def symbolic_equations(nodes, dim=2):
+    stress_components = {1: 1, 2: 3, 3: 6}[dim]
+    weights = weight_lookup[nodes]
+
     Ns = shapes[nodes]()
     x = sum([n * x_ for n, x_ in zip(Ns, x0[:nodes])])
     y = sum([n * y_ for n, y_ in zip(Ns, y0[:nodes])])
@@ -141,19 +147,24 @@ def symbolic_equations(nodes, dim=2):
     J = (sympy.diff(x, e) * sympy.diff(y, n) -
          sympy.diff(x, n) * sympy.diff(y, e)).expand()
 
+    print(disp)
+    stress = np.reshape(
+        sum([
+            np.matmul(np.matmul(D, B(N, x, y, J)), (dx, dy))
+            for N, (dx, dy) in zip(Ns, disp[:nodes])
+        ]), (stress_components, 1))
+
+    # a list of Our integration points and weightings.
+    X = integration_points[weights]
+    W = integration_weights[weights]
+
     # Init K and F to 0
     K = np.zeros((nodes * dim, nodes * dim), dtype="object")
     F = np.zeros((nodes * dim, 1), dtype="object")
     # Init value for our stress calculations
-    stress_components = {1: 1, 2: 3, 3: 6}[dim]
     M = np.zeros((nodes * stress_components, nodes * stress_components),
                  dtype="object")
     P = np.zeros((nodes * stress_components, 1), dtype="object")
-
-    # a list of Our integration points and weightings.
-    weights = weight_lookup[nodes]
-    X = integration_points[weights]
-    W = integration_weights[weights]
 
     subs = lambda Xe, Xn: lambda k: list(
         map(lambda k: k.subs({
@@ -185,7 +196,7 @@ def symbolic_equations(nodes, dim=2):
             m = np.sum([
                 Wx * Wy * m.subs({
                     e: Xe,
-                    m: Xn
+                    n: Xn
                 }) for ((Xe, Xn), (Wx, Wy)) in zip(X, W)
             ],
                        axis=0) * np.eye(stress_components)
@@ -211,13 +222,13 @@ def symbolic_equations(nodes, dim=2):
         ])
 
         # We can also set up our projection vector
-        p = Na * J
+        p = Na * stress * J
+        print(p.shape)
+        print(p)
         P[stress_components * i:stress_components * i +
           stress_components] = sum([
-              Wx * Wy * p.subs({
-                  e: Xe,
-                  n: Xn
-              }) for ((Xe, Xn), (Wx, Wy)) in zip(X, W)
+              Wx * Wy * np.array(list(map(subs(Xe, Xn), p)))
+              for ((Xe, Xn), (Wx, Wy)) in zip(X, W)
           ])
 
     # We put it in horner form since it is supposed to be one of the best forms
@@ -227,15 +238,15 @@ def symbolic_equations(nodes, dim=2):
     F = np.array(
         list(map(lambda f: list(map(sympy2.polys.polyfuncs.horner, f)),
                  F))).T[0]
-    P = np.array(
-        list(map(lambda p: list(map(sympy2.polys.polyfuncs.horner, p)),
-                 P))).T[0]
-    precompute, reduced = cse(np.concatenate((K, M, F, P)))
+    P = list(map(factor, np.reshape(P, (1, -1))[0]))
+    print(len(P))
+    pdb.set_trace()
+    precompute, reduced = cse(np.concatenate((K, M, F)))
+    precomputeP, reducedP = cse(P)
 
     # Reshape our square matrices
-    P = reduced[len(K) + len(M) + len(F):]
-    F = reduced[len(K) + len(M):-len(P)]
-    M = np.reshape(reduced[len(K):-len(F) - len(P)],
+    F = reduced[len(K) + len(M):]
+    M = np.reshape(reduced[len(K):-len(F)],
                    (nodes * stress_components, nodes * stress_components))
     K = np.reshape(reduced[:len(K)], (nodes * dim, nodes * dim))
 
@@ -244,24 +255,39 @@ def symbolic_equations(nodes, dim=2):
         sympy2.octave_code(v) + "=" + sympy2.octave_code(k)
         for (v, k) in precompute
     ])
+    codeP = ";".join([
+        sympy2.octave_code(v) + "=" + sympy2.octave_code(k)
+        for (v, k) in precomputeP
+    ])
     return """
-    {}
+    {};
     K=[{}];
-    F=[{}];
-    M=[{}];
-    P=[{}];""".format(format_code(code, convert=False), format_code(K),
-                      format_code(F), format_code(M), format_code(P))
+    F=[{}]\';
+    M=[{}];""".format(format_code(code, convert=False), format_code(K),
+                        format_coede(F, trim=1),
+                       format_code(M)), """
+    {};
+    P=[{}];""".format(format_code(codeP,convert=False), format_code(reducedP, trim=1))
 
 
 def main():
     renderer = pystache.Renderer()
-    quad = symbolic_equations(4)
-    serindipity = symbolic_equations(8)
+    quad, qp = symbolic_equations(4)
+    serindipity, qs = symbolic_equations(8)
+    bubble, qb = symbolic_equations(9)
     # Generate our stiffness equations.
     with open('matlab/local_values.m', 'w') as file:
         print(renderer.render_path("templates/local_values.m.tmpl", {
             "quad": quad,
-            "serindipity": serindipity
+            "serindipity": serindipity,
+            "bubble": bubble,
+        }),
+              file=file)
+    with open('matlab/local_projection.m', 'w') as file:
+        print(renderer.render_path("templates/local_projection.m.tmpl", {
+            "quad": qp,
+            "serindipity": qs,
+            "bubble": qb,
         }),
               file=file)
 
