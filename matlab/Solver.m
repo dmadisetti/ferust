@@ -48,6 +48,9 @@ classdef Solver < handle
                 if overrides.isKey('bforce')
                     bforce = overrides('bforce');
                 end
+                if overrides.isKey('fixelements')
+                    element = solver.fix_elements(nodes, element, nen);
+                end
             end
 
             % We set our plane strain condition
@@ -59,7 +62,7 @@ classdef Solver < handle
 
             % Bind provided to instance
             solver.nodes = nodes;
-            solver.elements = solver.fix_elements(nodes, element, nen);
+            solver.elements = element;
             solver.integration = integration;
             solver.bforce = bforce;
             solver.mu = u;
@@ -92,8 +95,9 @@ classdef Solver < handle
             % scalable solver for banded linear systems
             % This is also a great sanity check, since this line fails if K
             % is not positive def.
-            R = chol(solver.K);
-            d = R\(R'\solver.force);
+            %R = chol(solver.K);
+            %d = R\(R'\solver.force);
+            d = solver.K\solver.force;
 
             % We now need to massage our local d to a global context.
             solver.contextulize_d(d, ID, M);
@@ -109,8 +113,9 @@ classdef Solver < handle
             end
 
             % We can finally solve for our stresses
-            R = chol(solver.Mass);
-            solver.stresses = R\(R'\solver.projection);
+            %R = chol(solver.Mass);
+            %solver.stresses = R\(R'\solver.projection);
+            solver.stresses = solver.Mass\solver.projection;
 
             % And thus our reaction forces.
             solver.reaction = solver.gK * reshape(solver.displacements', [], 1) ...
@@ -306,7 +311,7 @@ classdef Solver < handle
         function stress_fn = get_interpolate_stress_fn(solver, element)
             %get_interpolate_stress_fn: returns a function that can calculate
             % the stress at a given point for an element.
-            e = solver.elements(element, :);
+            e = solver.elements(element, :)';
             xx = local_interpolation(solver.nodes(e, 1), ...
                 solver.nodes(e, 2), ...
                 solver.stresses(3 * e - 2), length(e));
@@ -316,7 +321,7 @@ classdef Solver < handle
             xy = local_interpolation(solver.nodes(e, 1), ...
                 solver.nodes(e, 2), ...
                 solver.stresses(3 * e), length(e));
-            stress_fn = @(x, y) [xx(x ,y) yy(x ,y) xy(x ,y)];
+            stress_fn = @(y, x) [xx(x ,y) yy(x ,y) xy(x ,y)];
         end
         function stress = interpolate_stress(solver, x, y)
             %interpolate_stress: Finds the element that contains x, y and
@@ -336,14 +341,14 @@ classdef Solver < handle
         function displacement_fn = get_interpolate_displacement_fn(solver, element)
             %get_interpolate_displacement_fn: returns a function that can calculate
             % the displacement at a given point for an element.
-            e = solver.elements(element, :);
+            e = solver.elements(element, :)';
             X = local_interpolation(solver.nodes(e, 1), ...
                 solver.nodes(e, 2), ...
                 solver.displacements(e, 1), length(e));
             Y = local_interpolation(solver.nodes(e, 1), ...
                 solver.nodes(e, 2), ...
                 solver.displacements(e, 2), length(e));
-            displacement_fn = @(x, y) [X(x ,y) Y(x ,y)];
+            displacement_fn = @(y, x) [X(x ,y) Y(x ,y)];
         end
         function displacement = interpolate_displacement(solver, x, y)
             %interpolate_displacement: Finds the element that contains x, y and
@@ -353,14 +358,14 @@ classdef Solver < handle
                 c = convhull(solver.nodes(e, 1), solver.nodes(e, 2));
                 if inpolygon(x, y, solver.nodes(e(c), 1), solver.nodes(e(c), 2))
                     displacement_fn = solver.get_interpolate_displacement_fn(i);
-                    displacement = displacement_fn(x, y);
+                    displacement = displacement_fn(y, x);
                     return;
                 end
                 i = i + 1;
             end
             displacement = NaN([1 solver.dims]);
         end
-        function [vargargout] = contour_stress(solver, resolution)
+        function [varargout] = contour_stress(solver, resolution)
             %contour_stress: Creates a mesh grid of stress results plotted at
             % the respective displacments. Called with no return, this will
             % plot.
