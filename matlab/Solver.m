@@ -17,32 +17,54 @@ classdef Solver < handle
         reaction      % [nodes x dim] Calculated reaction forces at nodes.
         node_reaction % Calculated reaction forces at constrained nodes.
         reaction_sum  % [dim x 1] Of the sum of the reaction forces in X and Y
+        local_k       % Debug value to see what the local k is
     end
     properties (Constant = true)
         dims = cast(2, 'uint16');
         stress_components = cast(3, 'uint16');
     end
     methods
-        function solver = Solver(filename)
+        function solver = Solver(filename, overrides)
+            %Solver: Class to solve a finite element problem, given an input
+            % file.
+
             % First we need to parse our input file
             [nodes, element, ~, ~, nen, integration, nnd, ps, nu, E, ...
                 Force_Node, bforce, disp_BC] = Read_input(filename);
-            
+            % We allow for programmatic overrides from the input file.
+            if nargin > 1
+                if overrides.isKey('integration')
+                    integration = overrides('integration');
+                end
+                if overrides.isKey('nu')
+                    nu = overrides('nu');
+                end
+                if overrides.isKey('E')
+                    E = overrides('E');
+                end
+                if overrides.isKey('ps')
+                    ps = overrides('ps');
+                end
+                if overrides.isKey('bforce')
+                    bforce = overrides('bforce');
+                end
+            end
+
             % We set our plane strain condition
             u = E / (2*(1 + nu));
             l = E * nu / ((1 + nu) * (1 - 2 * nu));
             if ps == 2
                 l = (2 * l * u / (l + 2 * u));
             end
-            
+
             % Bind provided to instance
             solver.nodes = nodes;
-            solver.elements = element;
+            solver.elements = solver.fix_elements(nodes, element, nen);
             solver.integration = integration;
             solver.bforce = bforce;
             solver.mu = u;
             solver.lame = l;
-            
+
             % Initialize our data with 0s
             equations = nnd * solver.dims - length(disp_BC);
             solver.K = zeros([equations, equations]);
@@ -53,15 +75,15 @@ classdef Solver < handle
                 nnd * solver.stress_components]);
             solver.projection = zeros([nnd * solver.stress_components, 1]);
             solver.displacements = zeros([nnd, solver.dims]);
-            
+
             % Build useful data structures. Note, we opt not to use a LM
             % array, but make extensive usage of the ID array, in addition
             % to a map M for boundary condition lookup.
             M = solver.build_map(solver.dims, disp_BC);
             ID = solver.build_id(M, solver.dims, nnd);
-            
+
             solver.crunch_local_data(ID, M, nen);
-            
+
             % With a set K matrix and forces, we can solve for our
             % displacements. Since K is garunteed to be positive definite
             % we solve using Choleksy as a speed up method. There are
@@ -70,13 +92,12 @@ classdef Solver < handle
             % scalable solver for banded linear systems
             % This is also a great sanity check, since this line fails if K
             % is not positive def.
-            % R = chol(solver.K);
-            % d = R\(R'\solver.force);
-            d = solver.K\solver.force;
+            R = chol(solver.K);
+            d = R\(R'\solver.force);
 
             % We now need to massage our local d to a global context.
             solver.contextulize_d(d, ID, M);
-            
+
             % For stresses, we now need a projection vector, dependent on
             % the displacements just calculated.
             for e=element'
@@ -86,11 +107,11 @@ classdef Solver < handle
                     local_projection(nodes(e,1), nodes(e,2), solver.displacements(e, :), ...
                     u, l, nen, solver.integration)';
             end
-            
+
             % We can finally solve for our stresses
             R = chol(solver.Mass);
             solver.stresses = R\(R'\solver.projection);
-            
+
             % And thus our reaction forces.
             solver.reaction = solver.gK * reshape(solver.displacements', [], 1) ...
                 - solver.bForce;
@@ -103,6 +124,8 @@ classdef Solver < handle
     end
     methods(Access = private, Hidden = true, Sealed = true)
         function crunch_local_data(solver, ID, M, nen)
+            %crunch_local_data: Function to determine local stiffness, force,
+            % and mass contributions and assemble them.
             for e=solver.elements'
                 % Compute Stifffness, Local Force and local Mass in one
                 % Fell swoop.
@@ -117,17 +140,19 @@ classdef Solver < handle
                 gs = reshape([gx' ; gy'], [], 2 * nen)';
                 % Provide indices for the global K matrix.
                 es = reshape([(2 * e -1)'; (2 * e)'], [], 2 * nen)';
-                
+
                 % Aggregate contribution to the solvable equations.
                 interleave = gs > 0;
                 solver.force(gs(interleave)) = ...
                     solver.force(gs(interleave)) + f(interleave);
                 % Record the global body force felt.
                 solver.bForce(es) = solver.bForce(es) + f;
-                
+
                 % We examine every x vs x, y vs y and x vs y of the element
                 % and record the pertinent data.
                 for ex = 1:nen
+                    % In the case gx > 0 we have a boundary condition. As such
+                    % this displacement is not solvable.
                     gx0 = gx(ex) > 0;
                     % x vs x
                     for ex1 = ex:nen
@@ -146,8 +171,10 @@ classdef Solver < handle
                         % Mass is also symmetric.
                         solver.Mass(3*e(ex1)-2:3*e(ex1),3*e(ex)-2:3*e(ex)) = ...
                             solver.Mass(3*e(ex)-2:3*e(ex),3*e(ex1)-2:3*e(ex1));
-                        
-                        % Record global stiffness contribution.
+
+                        % Record global stiffness contribution, regardless of
+                        % BC. Since this will be used for our stress
+                        % calculations.
                         solver.gK(2*e(ex) - 1, 2*e(ex1) - 1) = ...
                             solver.gK(2*e(ex) - 1, 2*e(ex1) - 1) + k(2 * ex - 1, 2 * ex1 - 1);
                         solver.gK(2*e(ex1)- 1, 2*e(ex) - 1) = solver.gK(2*e(ex) - 1, 2*e(ex1) - 1);
@@ -159,8 +186,8 @@ classdef Solver < handle
                             solver.force(gs(interleave)) ... % Previous force contributions
                             - k(interleave, ex * 2 - 1) * bc(1); % discount displacement contribution
                     end
-                    
-                    % x v y and y v y contributions
+
+                    % Inner loop to compute x vs y and y vs y contributions
                     for ey = 1:nen
                         gy0 = gy(ey) > 0;
                         % Check to make sure we only capture y v y once.
@@ -185,10 +212,10 @@ classdef Solver < handle
                                     - k(interleave, ey * 2) * bc(2); % discount displacement contribution
                             end
                         end
-                        % Capture cross contributions, x v y and y v x
+                        % Capture cross contributions, x vs. y and y vs. x
                         if gx0 && gy0
                             solver.K(gx(ex), gy(ey)) = ...
-                                solver.K(gx(ex), gy(ey)) + k(2 * ex, 2 * ey - 1);
+                                solver.K(gx(ex), gy(ey)) + k(2 * ex - 1, 2 * ey);
                             solver.K(gy(ey), gx(ex)) = ...
                                 solver.K(gx(ex), gy(ey));
                         end
@@ -199,6 +226,7 @@ classdef Solver < handle
                     end
                 end
             end
+            solver.local_k = k;
         end
         function contextulize_d(solver, d, ID, M)
             solver.displacements(ID > 0) = d(ID(ID > 0));
@@ -213,7 +241,35 @@ classdef Solver < handle
         end
     end
     methods(Static, Access = private, Hidden = true, Sealed = true)
+        function elements = fix_elements(nodes, old_elements, nen)
+            %fix_elements: Ensure that convention for node numbering is
+            % respected. I don't think this is violated in our examples, but
+            % something Adyota said left me paranoid.
+            elements = old_elements * 0;
+            index = 1;
+            for e = old_elements'
+                c = convhull(nodes(e, 1), nodes(e, 2));
+                [~, new_order] = ismember(...
+                    polyshape(nodes(e(c), :), ...
+                    'SolidBoundaryOrientation', 'ccw', ...
+                    'Simplify', false).Vertices, ...
+                    nodes(e, :),'rows');
+                if nen == 4
+                    elements(index, :) = e(new_order);
+                else
+                    elements(index, 1:4) = e(new_order(1:2:8));
+                    elements(index, 5:8) = e(new_order(2:2:8));
+                    if nen == 9
+                        mask = true([1 9]);
+                        mask(new_order) = 0;
+                        elements(index, 9) = e(mask);
+                    end
+                end
+                index = index + 1;
+            end
+        end
         function M = build_map(dims, disp_BC)
+            %build_map: Creates hashmap for boundary condition lookup.
             bc_nodes = cast(disp_BC(:, 1), 'uint16');
             M = containers.Map(bc_nodes, ...
                 mat2cell( ...
@@ -226,6 +282,8 @@ classdef Solver < handle
             end
         end
         function ID = build_id(M, dims, nnd)
+            %build_id: Creates the ID matrix for a given
+            % system.
             ID = zeros([nnd dims], 'uint16');
             id = 1;
             for node = 1:nnd
@@ -246,6 +304,8 @@ classdef Solver < handle
     end
     methods(Access = public, Sealed = true)
         function stress_fn = get_interpolate_stress_fn(solver, element)
+            %get_interpolate_stress_fn: returns a function that can calculate
+            % the stress at a given point for an element.
             e = solver.elements(element, :);
             xx = local_interpolation(solver.nodes(e, 1), ...
                 solver.nodes(e, 2), ...
@@ -259,38 +319,102 @@ classdef Solver < handle
             stress_fn = @(x, y) [xx(x ,y) yy(x ,y) xy(x ,y)];
         end
         function stress = interpolate_stress(solver, x, y)
+            %interpolate_stress: Finds the element that contains x, y and
+            % calculates the stresses at that point in the element.
             i = 1;
             for e = solver.elements'
-                if inpolygon(x, y, solver.nodes(e, 1), solver.nodes(e, 2))
-                    stress_fn = get_interpolate_stress_fn(i);
+                c = convhull(solver.nodes(e, 1), solver.nodes(e, 2));
+                if inpolygon(x, y, solver.nodes(e(c), 1), solver.nodes(e(c), 2))
+                    stress_fn = solver.get_interpolate_stress_fn(i);
                     stress = stress_fn(x, y);
                     return;
                 end
                 i = i + 1;
             end
-            stress = NaN(solver.stress_components);
+            stress = NaN([1 solver.stress_components]);
         end
         function displacement_fn = get_interpolate_displacement_fn(solver, element)
-            e = solver.elements(element);
+            %get_interpolate_displacement_fn: returns a function that can calculate
+            % the displacement at a given point for an element.
+            e = solver.elements(element, :);
             X = local_interpolation(solver.nodes(e, 1), ...
                 solver.nodes(e, 2), ...
-                solver.displacements(2 * e - 1), length(e));
+                solver.displacements(e, 1), length(e));
             Y = local_interpolation(solver.nodes(e, 1), ...
                 solver.nodes(e, 2), ...
-                solver.displacements(2 * e), length(e));
+                solver.displacements(e, 2), length(e));
             displacement_fn = @(x, y) [X(x ,y) Y(x ,y)];
         end
         function displacement = interpolate_displacement(solver, x, y)
+            %interpolate_displacement: Finds the element that contains x, y and
+            % calculates the displacement at that point in the element.
             i = 1;
             for e = solver.elements'
-                if inpolygon(x, y, solver.nodes(e, 1), solver.nodes(e, 2))
-                    displacement_fn = get_interpolate_displacement_fn(i);
+                c = convhull(solver.nodes(e, 1), solver.nodes(e, 2));
+                if inpolygon(x, y, solver.nodes(e(c), 1), solver.nodes(e(c), 2))
+                    displacement_fn = solver.get_interpolate_displacement_fn(i);
                     displacement = displacement_fn(x, y);
                     return;
                 end
                 i = i + 1;
             end
-            displacement = NaN(solver.dims);
+            displacement = NaN([1 solver.dims]);
+        end
+        function [vargargout] = contour_stress(solver, resolution)
+            %contour_stress: Creates a mesh grid of stress results plotted at
+            % the respective displacments. Called with no return, this will
+            % plot.
+            if nargin == 1
+                resolution = 10;
+            end
+            dt = 1/resolution;
+            resolution = uint32(resolution);
+            rx = max(solver.nodes(:, 1)) * resolution + 1;
+            ry = max(solver.nodes(:, 2)) * resolution + 1;
+            stress = zeros([rx, ry, 3]);
+            displacement = zeros([rx, ry, 2]);
+            for i = 1:rx
+                dx = double(i - 1) * dt;
+                for j = 1:ry
+                    dy = double(j - 1) * dt;
+                    stress(i, j, :) = solver.interpolate_stress(dx, dy);
+                    displacement(i,j,:) = [dx dy] + solver.interpolate_displacement(dx, dy);
+                end
+            end
+            if nargout == 0
+              fn = @(i) contourf(displacement(:, :, 1), displacement(:, :, 2), stress(:, :, i));
+              subplot(3,1,1);
+              fn(1);
+              subplot(3,1,2);
+              fn(2);
+              subplot(3,1,3);
+              fn(2);
+            else
+              varargout{1} = stress;
+              if nargout > 1
+                varargout{2} = displacement;
+              end
+            end
+        end
+        function plot_nodes_displaced(solver, displacements)
+            %plot_nodes_displaced: Plots the deformed body.
+            if nargin == 1
+                displacements = solver.displacements;
+            end
+            nx = solver.nodes(:, 1) + displacements(:, 1);
+            ny = solver.nodes(:, 2) + displacements(:, 2);
+            scatter(nx, ny, ...
+                10, 'filled');
+            hold on;
+            for e = solver.elements'
+                c = convhull(nx(e), ny(e));
+                plot(polyshape(nx(e(c)), ny(e(c)), ...
+                    'Simplify', false));
+            end
+        end
+        function plot_nodes(solver)
+            %plot_nodes_displaced: Plots the undeformed body.
+            solver.plot_nodes_displaced(0 * solver.nodes);
         end
     end
 end
