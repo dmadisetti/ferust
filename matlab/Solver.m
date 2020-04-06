@@ -231,8 +231,8 @@ classdef Solver < handle
                             solver.gK(2*e(ex)-1, 2*e(ey));
                     end
                 end
+                solver.local_k = k
             end
-            solver.local_k = k;
         end
         function contextulize_d(solver, d, ID, M)
             solver.displacements(ID > 0) = d(ID(ID > 0));
@@ -322,11 +322,28 @@ classdef Solver < handle
             xy = local_interpolation(solver.nodes(e, 1), ...
                 solver.nodes(e, 2), ...
                 solver.stresses(3 * e), length(e));
-            stress_fn = @(x, y) [xx(x ,y) yy(x ,y) xy(x ,y)];
+            stress_fn = @(y, x) [xx(x ,y) yy(x ,y) xy(x ,y)];
+        end
+        function stress = interpolate_parametric_stress(solver, elem, X, Y)
+            %interpolate_stress: Finds the element that contains x, y and
+            % calculates the stresses at that point in the element.
+            assert(length(X) == length(Y));
+            assert(length(elem) == length(Y));
+            stress = NaN([length(X) solver.stress_components]);
+            for index = 1:length(X)
+                x = X(index);
+                y = Y(index);
+                e = elem(index);
+                stress_fn = solver.get_interpolate_stress_fn(e);
+                stress(index, :) = stress_fn(x, y);
+            end
         end
         function stress = interpolate_stress(solver, x, y)
             %interpolate_stress: Finds the element that contains x, y and
             % calculates the stresses at that point in the element.
+            % NOTE! I was hoping to do the inverse function, there's some
+            % interesting literature on it. However, I decided to pass over
+            % it for now.
             i = 1;
             for e = solver.elements'
                 c = convhull(solver.nodes(e, 1), solver.nodes(e, 2));
@@ -339,6 +356,18 @@ classdef Solver < handle
             end
             stress = NaN([1 solver.stress_components]);
         end
+        function position_fn = get_interpolate_position_fn(solver, element)
+            %get_interpolate_displacement_fn: returns a function that can calculate
+            % the displacement at a given point for an element.
+            e = solver.elements(element, :)';
+            X = local_interpolation(solver.nodes(e, 1), ...
+                solver.nodes(e, 2), ...
+                solver.nodes(e, 1), length(e));
+            Y = local_interpolation(solver.nodes(e, 1), ...
+                solver.nodes(e, 2), ...
+                solver.nodes(e, 2), length(e));
+            position_fn = @(y, x) [X(x ,y) Y(x ,y)];
+        end
         function displacement_fn = get_interpolate_displacement_fn(solver, element)
             %get_interpolate_displacement_fn: returns a function that can calculate
             % the displacement at a given point for an element.
@@ -349,7 +378,7 @@ classdef Solver < handle
             Y = local_interpolation(solver.nodes(e, 1), ...
                 solver.nodes(e, 2), ...
                 solver.displacements(e, 2), length(e));
-            displacement_fn = @(x, y) [X(x ,y) Y(x ,y)];
+            displacement_fn = @(y, x) [X(x ,y) Y(x ,y)];
         end
         function displacement = interpolate_displacement(solver, X, Y)
             %interpolate_displacement: Finds the element that contains x, y and
@@ -371,39 +400,59 @@ classdef Solver < handle
                 end
             end
         end
-        function [varargout] = contour_stress(solver, resolution)
+        function [varargout] = contour_stress(solver, integration)
             %contour_stress: Creates a mesh grid of stress results plotted at
             % the respective displacments. Called with no return, this will
             % plot.
-            if nargin == 1
+            if nargin == 1 || length(integration) == 1
                 resolution = 10;
+                if nargin == 2
+                    resolution = integration;
+                end
+                integration = 2*((mod(1, 1/resolution)/2):(1/resolution):1) - 1;
+            else
+                resolution = length(integration);
             end
-            dt = 1/resolution;
             resolution = uint32(resolution);
-            rx = max(solver.nodes(:, 1)) * resolution + 1;
-            ry = max(solver.nodes(:, 2)) * resolution + 1;
+            rx = size(solver.elements, 1) * resolution;
+            ry = resolution;
             stress = zeros([rx, ry, 3]);
             displacement = zeros([rx, ry, 2]);
-            for i = 1:rx
-                dx = double(i - 1) * dt;
-                for j = 1:ry
-                    dy = double(j - 1) * dt;
-                    stress(i, j, :) = solver.interpolate_stress(dx, dy);
-                    displacement(i,j,:) = [dx dy] + solver.interpolate_displacement(dx, dy);
+            position = zeros([rx, ry, 2]);
+            
+            for index  = 1:size(solver.elements, 1)
+                position_fn = solver.get_interpolate_position_fn(index);
+                displacement_fn = solver.get_interpolate_displacement_fn(index);
+                stress_fn = solver.get_interpolate_stress_fn(index);
+                i = 1;
+                for point_x = integration
+                    j=1;
+                    for point_y = integration
+                        stress(resolution*(index-1) + i, j, :) = stress_fn(point_x, point_y);
+                        position(resolution*(index-1) + i, j, :) = position_fn(point_x, point_y);
+                        displacement(resolution*(index-1) + i,j,:) = displacement_fn(point_x, point_y);
+                        j = j + 1;
+                    end
+                    i=i+1;
                 end
             end
             if nargout == 0
-              fn = @(i) contourf(displacement(:, :, 1), displacement(:, :, 2), stress(:, :, i));
+              fn = @(i) contourf(position(:, :, 1) + displacement(:, :, 1), ...
+                  position(:, :, 2) + displacement(:, :, 2), ...
+                  stress(:, :, i));
               subplot(3,1,1);
               fn(1);
               subplot(3,1,2);
               fn(2);
               subplot(3,1,3);
-              fn(2);
+              fn(3);
             else
               varargout{1} = stress;
               if nargout > 1
                 varargout{2} = displacement;
+                if nargout > 2
+                    varargout{3} = position;
+                end
               end
             end
         end
@@ -435,17 +484,51 @@ classdef Solver < handle
 
             writematrix(strcat(name, "-nodes", ".txt"), ...
                 [solver.nodes solver.displacements solver.stresses]);
-
+            if solver.integration == 4
+                [stress, disp] = solver.contour_stress([-1/sqrt(3), 1/sqrt(3)]);
+                writematrix(strcat(name, "-nodes", ".txt"), ...
+                    [reshape(disp, [], 2) reshape(stress, [], 3)]);
+            else
+                [stress, disp] = solver.contour_stress([-sqrt(3/5), 0, sqrt(3/5)]);
+                writematrix(strcat(name, "-nodes", ".txt"), ...
+                    [reshape(disp, [], 2) reshape(stress, [], 3)]);
+            end
             % OK. Things to do:
             %   - Fix bubble
             %   - Set up local interpolation
             %   - Set up parametric interpolation
-            %   - Dump file
             %   - Clean report
 
             % strcat(name, "-points", ".txt")
             %plot_nodes_displaced: Plots the undeformed body.
             %solver.plot_nodes_displaced(0 * solver.nodes);
+        end
+        function plot_centerline(solver)
+            %get_interpolate_displacement_fn: returns a function that can calculate
+            % the displacement at a given point for an element.
+            [~, disp, pos] = solver.contour_stress(9);
+            disp_y = disp(:, :, 2);
+            pos_x = pos(:, :, 1);
+            mask = pos(:, :, 2) == 0.5;
+            plot(pos_x(mask), disp_y(mask));
+        end
+        function plot_midline_xx(solver)
+            %get_interpolate_displacement_fn: returns a function that can calculate
+            % the displacement at a given point for an element.
+            [stress, ~, pos] = solver.contour_stress(9);
+            stress_xx = stress(:, :, 1);
+            pos_y = pos(:, :, 2);
+            mask = pos(:, :, 1) == 6;
+            plot(pos_y(mask), stress_xx(mask));
+        end
+        function plot_midline_xy(solver)
+            %get_interpolate_displacement_fn: returns a function that can calculate
+            % the displacement at a given point for an element.
+            [stress, ~, pos] = solver.contour_stress(9);
+            stress_xy = stress(:, :, 2);
+            pos_y = pos(:, :, 2);
+            mask = pos(:, :, 1) == 6;
+            plot(pos_y(mask), stress_xy(mask));
         end
     end
 end

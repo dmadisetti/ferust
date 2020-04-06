@@ -8,6 +8,7 @@ biaxial_Q4_2x2 = Solver("Biaxial_Q4_2x2.txt");
 
 % AL Beams
 beam_Bending_Q4_4x1_Al = Solver("Beam_Bending_Q4_4x1_Al.txt");
+beam_Bending_Q4_4x1_Al.plot_centerline()
 beam_Bending_Q4_8x2_Al = Solver("Beam_Bending_Q4_8x2_Al.txt");
 beam_Bending_Q4_16x4_Al = Solver("Beam_Bending_Q4_16x4_Al.txt");
 beam_Bending_Q8_4x1_Al = Solver("Beam_Bending_Q8_4x1_Al.txt");
