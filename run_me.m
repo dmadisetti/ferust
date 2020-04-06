@@ -2,7 +2,6 @@
 
 % You may need to add the following directories to your path.
 %addpath('examples', 'matlab');
-
 %% Solve for displacements
 % Sample case
 biaxial_Q4_2x2 = Solver("Biaxial_Q4_2x2.txt");

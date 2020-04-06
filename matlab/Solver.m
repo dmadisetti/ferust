@@ -52,6 +52,7 @@ classdef Solver < handle
                     element = solver.fix_elements(nodes, element, nen);
                 end
             end
+            element = solver.fix_elements(nodes, element, nen);
 
             % We set our plane strain condition
             u = E / (2*(1 + nu));
@@ -123,8 +124,7 @@ classdef Solver < handle
             % Including the reactions specifically asked for.
             solver.node_reaction = [solver.reaction(2 * Force_Node - 1) ...
                 solver.reaction(2 * Force_Node)];
-            solver.reaction_sum = [sum(solver.node_reaction(:, 1)) ...
-                sum(solver.node_reaction(:, 1))]';
+            solver.reaction_sum = sum(solver.node_reaction, 1);
         end
     end
     methods(Access = private, Hidden = true, Sealed = true)
@@ -321,7 +321,7 @@ classdef Solver < handle
             xy = local_interpolation(solver.nodes(e, 1), ...
                 solver.nodes(e, 2), ...
                 solver.stresses(3 * e), length(e));
-            stress_fn = @(y, x) [xx(x ,y) yy(x ,y) xy(x ,y)];
+            stress_fn = @(x, y) [xx(x ,y) yy(x ,y) xy(x ,y)];
         end
         function stress = interpolate_stress(solver, x, y)
             %interpolate_stress: Finds the element that contains x, y and
@@ -348,7 +348,7 @@ classdef Solver < handle
             Y = local_interpolation(solver.nodes(e, 1), ...
                 solver.nodes(e, 2), ...
                 solver.displacements(e, 2), length(e));
-            displacement_fn = @(y, x) [X(x ,y) Y(x ,y)];
+            displacement_fn = @(x, y) [X(x ,y) Y(x ,y)];
         end
         function displacement = interpolate_displacement(solver, x, y)
             %interpolate_displacement: Finds the element that contains x, y and
@@ -358,7 +358,7 @@ classdef Solver < handle
                 c = convhull(solver.nodes(e, 1), solver.nodes(e, 2));
                 if inpolygon(x, y, solver.nodes(e(c), 1), solver.nodes(e(c), 2))
                     displacement_fn = solver.get_interpolate_displacement_fn(i);
-                    displacement = displacement_fn(y, x);
+                    displacement = displacement_fn(x, y);
                     return;
                 end
                 i = i + 1;
