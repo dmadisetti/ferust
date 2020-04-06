@@ -52,7 +52,6 @@ classdef Solver < handle
                     element = solver.fix_elements(nodes, element, nen);
                 end
             end
-            element = solver.fix_elements(nodes, element, nen);
 
             % We set our plane strain condition
             u = E / (2*(1 + nu));
@@ -96,9 +95,8 @@ classdef Solver < handle
             % scalable solver for banded linear systems
             % This is also a great sanity check, since this line fails if K
             % is not positive def.
-            %R = chol(solver.K);
-            %d = R\(R'\solver.force);
-            d = solver.K\solver.force;
+            R = chol(solver.K);
+            d = R\(R'\solver.force);
 
             % We now need to massage our local d to a global context.
             solver.contextulize_d(d, ID, M);
@@ -114,8 +112,6 @@ classdef Solver < handle
             end
 
             % We can finally solve for our stresses
-            %R = chol(solver.Mass);
-            %solver.stresses = R\(R'\solver.projection);
             solver.stresses = solver.Mass\solver.projection;
             solver.stresses = reshape(solver.stresses, [], 3);
 
@@ -231,8 +227,8 @@ classdef Solver < handle
                             solver.gK(2*e(ex)-1, 2*e(ey));
                     end
                 end
-                solver.local_k = k
             end
+            solver.local_k = k;
         end
         function contextulize_d(solver, d, ID, M)
             solver.displacements(ID > 0) = d(ID(ID > 0));
@@ -506,7 +502,7 @@ classdef Solver < handle
         function plot_centerline(solver)
             %get_interpolate_displacement_fn: returns a function that can calculate
             % the displacement at a given point for an element.
-            [~, disp, pos] = solver.contour_stress(9);
+            [~, disp, pos] = solver.contour_stress(10);
             disp_y = disp(:, :, 2);
             pos_x = pos(:, :, 1);
             mask = pos(:, :, 2) == 0.5;
@@ -515,7 +511,7 @@ classdef Solver < handle
         function plot_midline_xx(solver)
             %get_interpolate_displacement_fn: returns a function that can calculate
             % the displacement at a given point for an element.
-            [stress, ~, pos] = solver.contour_stress(9);
+            [stress, ~, pos] = solver.contour_stress(10);
             stress_xx = stress(:, :, 1);
             pos_y = pos(:, :, 2);
             mask = pos(:, :, 1) == 6;
@@ -524,11 +520,36 @@ classdef Solver < handle
         function plot_midline_xy(solver)
             %get_interpolate_displacement_fn: returns a function that can calculate
             % the displacement at a given point for an element.
-            [stress, ~, pos] = solver.contour_stress(9);
+            [stress, ~, pos] = solver.contour_stress(10);
             stress_xy = stress(:, :, 2);
             pos_y = pos(:, :, 2);
             mask = pos(:, :, 1) == 6;
             plot(pos_y(mask), stress_xy(mask));
+        end
+        function val = get_nearest_node_val(solver, branch, integration, A)
+            %get_nearest_node_val
+            if nargin < 4
+                A = [6 1];
+                if nargin < 3
+                    integration = 10;
+                    if nargin == 1
+                        branch = 0;
+                    end
+                end
+            end
+            [stress, disp, pos] = solver.contour_stress(integration);
+            pos = reshape(pos, [], 2);
+            disp = reshape(disp, [], 2);
+            stress = reshape(stress, [], 3);
+            [~, index] = min(vecnorm((reshape(pos, [], 2) - A)'));
+            switch branch
+                case 0
+                    val = disp(index, :);
+                    return
+                case 1
+                    val = stress(index, :);
+                    return                    
+            end
         end
     end
 end
