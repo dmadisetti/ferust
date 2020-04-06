@@ -35,5 +35,5 @@ scatter([log(12/4)],[...
 
 legend("Q4 Meshes", "Q8 Mesh", "Q9 Mesh", "Q8 under-integrated", "Q9 under-integrated");
 title("Mesh Dependency on Reaction Error");
-xlabel("ln(error)")
-ylabel("ln(element size)")
+ylabel("ln(error)")
+xlabel("ln(element size)")

@@ -117,6 +117,7 @@ classdef Solver < handle
             %R = chol(solver.Mass);
             %solver.stresses = R\(R'\solver.projection);
             solver.stresses = solver.Mass\solver.projection;
+            solver.stresses = reshape(solver.stresses, [], 3);
 
             % And thus our reaction forces.
             solver.reaction = solver.gK * reshape(solver.displacements', [], 1) ...
@@ -350,20 +351,25 @@ classdef Solver < handle
                 solver.displacements(e, 2), length(e));
             displacement_fn = @(x, y) [X(x ,y) Y(x ,y)];
         end
-        function displacement = interpolate_displacement(solver, x, y)
+        function displacement = interpolate_displacement(solver, X, Y)
             %interpolate_displacement: Finds the element that contains x, y and
             % calculates the displacement at that point in the element.
-            i = 1;
-            for e = solver.elements'
-                c = convhull(solver.nodes(e, 1), solver.nodes(e, 2));
-                if inpolygon(x, y, solver.nodes(e(c), 1), solver.nodes(e(c), 2))
-                    displacement_fn = solver.get_interpolate_displacement_fn(i);
-                    displacement = displacement_fn(x, y);
-                    return;
+            assert(length(X) == length(Y));
+            displacement = NaN([length(X) solver.dims]);
+            for index = 1:length(X)
+                x = X(index);
+                y = Y(index);
+                i = 1;
+                for e = solver.elements'
+                    c = convhull(solver.nodes(e, 1), solver.nodes(e, 2));
+                    if inpolygon(x, y, solver.nodes(e(c), 1), solver.nodes(e(c), 2))
+                        displacement_fn = solver.get_interpolate_displacement_fn(i);
+                        displacement = displacement_fn(x, y);
+                        return;
+                    end
+                    i = i + 1;
                 end
-                i = i + 1;
             end
-            displacement = NaN([1 solver.dims]);
         end
         function [varargout] = contour_stress(solver, resolution)
             %contour_stress: Creates a mesh grid of stress results plotted at
@@ -420,6 +426,26 @@ classdef Solver < handle
         function plot_nodes(solver)
             %plot_nodes_displaced: Plots the undeformed body.
             solver.plot_nodes_displaced(0 * solver.nodes);
+        end
+        function write_files(solver)
+            name = inputname(1);
+            if strcmp(name, '%T0%')
+                name = 'anonymous';
+            end
+
+            writematrix(strcat(name, "-nodes", ".txt"), ...
+                [solver.nodes solver.displacements solver.stresses]);
+
+            % OK. Things to do:
+            %   - Fix bubble
+            %   - Set up local interpolation
+            %   - Set up parametric interpolation
+            %   - Dump file
+            %   - Clean report
+
+            % strcat(name, "-points", ".txt")
+            %plot_nodes_displaced: Plots the undeformed body.
+            %solver.plot_nodes_displaced(0 * solver.nodes);
         end
     end
 end
