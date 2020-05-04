@@ -473,61 +473,74 @@ classdef Solver < handle
             solver.plot_nodes_displaced(0 * solver.nodes);
         end
         function write_files(solver)
+            %write_files: Output needed files
             name = inputname(1);
             if strcmp(name, '%T0%')
                 name = 'anonymous';
             end
 
-            writematrix(strcat(name, "-nodes", ".txt"), ...
-                [solver.nodes solver.displacements solver.stresses]);
+            dlmwrite(strcat(name, "-nodes", ".txt"), ...
+                [solver.nodes solver.displacements solver.stresses], "\t|\t");
             if solver.integration == 4
-                [stress, disp] = solver.contour_stress([-1/sqrt(3), 1/sqrt(3)]);
-                writematrix(strcat(name, "-nodes", ".txt"), ...
-                    [reshape(disp, [], 2) reshape(stress, [], 3)]);
+                [stress, disp, pos] = solver.contour_stress([-1/sqrt(3), 1/sqrt(3)]);
+                dlmwrite(strcat(name, "-points", ".txt"), ...
+                    [reshape(pos, [], 2) reshape(disp, [], 2) reshape(stress, [], 3)]);
             else
-                [stress, disp] = solver.contour_stress([-sqrt(3/5), 0, sqrt(3/5)]);
-                writematrix(strcat(name, "-nodes", ".txt"), ...
-                    [reshape(disp, [], 2) reshape(stress, [], 3)]);
+                [stress, disp, pos] = solver.contour_stress([-sqrt(3/5), 0, sqrt(3/5)]);
+                dlmwrite(strcat(name, "-points", ".txt"), ...
+                    [reshape(pos, [], 2) reshape(disp, [], 2) reshape(stress, [], 3)]);
             end
-            % OK. Things to do:
-            %   - Fix bubble
-            %   - Set up local interpolation
-            %   - Set up parametric interpolation
-            %   - Clean report
-
-            % strcat(name, "-points", ".txt")
-            %plot_nodes_displaced: Plots the undeformed body.
-            %solver.plot_nodes_displaced(0 * solver.nodes);
         end
-        function plot_centerline(solver)
-            %get_interpolate_displacement_fn: returns a function that can calculate
-            % the displacement at a given point for an element.
+        function plot_axis(solver)
+            %plot_axis: Find and plot the y displacemnt at the center
+            % line. (For comparison with Euler Bernoulli)
             [~, disp, pos] = solver.contour_stress(10);
             disp_y = disp(:, :, 2);
             pos_x = pos(:, :, 1);
             mask = pos(:, :, 2) == 0.5;
-            plot(pos_x(mask), disp_y(mask));
+            [pos_x, I] = sort(pos_x(mask));
+            disp_y = disp_y(mask);
+            plot(pos_x, disp_y(I));
+        end
+        function plot_centerline(solver)
+            %plot_centerline: Find and plot the displacemnt at the center
+            % line.
+            [~, disp, pos] = solver.contour_stress(10);
+            disp_x = disp(:, :, 2);
+            disp_y = disp(:, :, 2);
+            pos_x = pos(:, :, 1);
+            mask = pos(:, :, 2) == 0.5;
+            [pos_x, I] = sort(pos_x(mask));
+            disp_x = disp_x(mask);
+            disp_y = disp_y(mask);
+            plot(pos_x + disp_x(I), disp_y(I));
         end
         function plot_midline_xx(solver)
-            %get_interpolate_displacement_fn: returns a function that can calculate
-            % the displacement at a given point for an element.
+            %plot_midline_xx: plots the xx stress along the center of the
+            %beam vertically.
             [stress, ~, pos] = solver.contour_stress(10);
             stress_xx = stress(:, :, 1);
             pos_y = pos(:, :, 2);
             mask = pos(:, :, 1) == 6;
-            plot(pos_y(mask), stress_xx(mask));
+            [pos_y, I] = sort(pos_y(mask));
+            stress_xx = stress_xx(mask);
+            plot(pos_y - 0.5, stress_xx(I));
         end
         function plot_midline_xy(solver)
-            %get_interpolate_displacement_fn: returns a function that can calculate
-            % the displacement at a given point for an element.
+            %plot_midline_xy: plots the xy stress along the center of the
+            %beam vertically.
             [stress, ~, pos] = solver.contour_stress(10);
             stress_xy = stress(:, :, 2);
             pos_y = pos(:, :, 2);
             mask = pos(:, :, 1) == 6;
-            plot(pos_y(mask), stress_xy(mask));
+            [pos_y, I] = sort(pos_y(mask));
+            stress_xy = stress_xy(mask);
+            plot(pos_y - 0.5, stress_xy(I));
         end
         function val = get_nearest_node_val(solver, branch, integration, A)
-            %get_nearest_node_val
+            %get_nearest_node_val: Branch determines which value to return.
+            % 0 for displacement, 1 for stress. Integration dictates what
+            % grid points to look at. A is the point to search for.
             if nargin < 4
                 A = [6 1];
                 if nargin < 3

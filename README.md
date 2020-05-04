@@ -58,6 +58,22 @@ Solver
             %plot_nodes_displaced: Plots the deformed body.
         function plot_nodes(solver)
             %plot_nodes_displaced: Plots the undeformed body.
+        function plot_axis(solver)
+            %plot_axis: Find and plot the y displacemnt at the center
+            % line. (For comparison with Euler Bernoulli)
+        function plot_centerline(solver)
+            %plot_centerline: Find and plot the displacment at the center
+            % line.
+        function plot_midline_xx(solver)
+            %plot_midline_xx: plots the xx stress along the center of the
+            %beam vertically.
+        function plot_midline_xy(solver)
+            %plot_midline_xy: plots the xy stress along the center of the
+            %beam vertically.
+        function val = get_nearest_node_val(solver, branch, integration, A)
+            %get_nearest_node_val: Branch determines which value to return.
+            % 0 for displacement, 1 for stress. Integration dictates what
+            % grid points to look at. A is the point to search for.
 
     Plotting Helpers
         function stress_fn = get_interpolate_stress_fn(solver, element)
@@ -72,13 +88,28 @@ Solver
         function displacement = interpolate_displacement(solver, x, y)
             %interpolate_displacement: Finds the element that contains x, y and
             % calculates the displacement at that point in the element.
+
+    Other:
+        function write_files(solver)
+            %write_files Writes out important details to files
 ```
 
 Usage would look something like:
 ```matlab
 % Sample case
 biaxial_Q4_2x2 = Solver("Biaxial_Q4_2x2.txt");
+biaxial_Q4_2x2.plot_nodes_displaced();
 biaxial_Q4_2x2.contour_stress();
+biaxial_Q4_2x2.write_files();
 ```
 
 where `"Biaxial_Q4_2x2.txt"` is the input file.
+
+NOTE: Output files may be produced with the `write_files` function.
+
+*-node files are csv files ordered by node number where each line is
+`[posx posy] [dispx dispy] [sigma_xx sigma_yy sigma_xy]`
+
+*-points files are a list of integration points in order of each element.
+Each line contains
+`[posx posy] [dispx dispy] [sigma_xx sigma_yy sigma_xy]`

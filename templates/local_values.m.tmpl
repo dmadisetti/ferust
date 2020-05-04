@@ -1,25 +1,36 @@
-function [K, F, M, P] = local_values(X, Y, u, l, local_nodes)
-  %local_stiffness Calculates the local stiffness for a given element and its
-  % type, using an appropriate integration method.
-  % NOTE: THIS IS GENERATED CODE. REFER TO local_stiffness.m.tmpl
+function [K, F, M] = local_values_{{integration}}(X, Y, u, l, f, local_nodes)
+  %local_stiffness Calculates the local stiffness, forces, mass matrix and
+  % projection vector for a given element and its type, using an appropriate
+  % integration method.
+  % NOTE: THIS IS GENERATED CODE. REFER TO local_values.m.tmpl and generate.py
   if local_nodes == 4
-    [K, F, M, P] = crunch_quad(X(1), X(2), X(3), X(4), ...
-                      Y(1), Y(2), Y(3), Y(4), u, l);
-  else
-    [K, F, M, P] = crunch_serindipity(X(1), X(2), X(3), X(4), ...
+    [K, F, M] = crunch_quad(X(1), X(2), X(3), X(4), ...
+                      Y(1), Y(2), Y(3), Y(4), u, l, f);
+  elseif local_nodes == 8
+    [K, F, M] = crunch_serindipity(X(1), X(2), X(3), X(4), ...
                            X(5), X(6), X(7), X(8), ...
                            Y(1), Y(2), Y(3), Y(4), ...
-                           Y(5), Y(6), Y(7), Y(8), u, l);
+                           Y(5), Y(6), Y(7), Y(8), u, l, f);
+  else
+    [K, F, M] = crunch_bubble(X(1), X(2), X(3), X(4), ...
+                           X(5), X(6), X(7), X(8), X(9), ...
+                           Y(1), Y(2), Y(3), Y(4), Y(5), ...
+                           Y(6), Y(7), Y(8), Y(9), u, l, f);
   end
   K = K + triu(K, 1).';
   M = M + triu(M, 1).';
 end
 
-function [K, F, M, P] = crunch_quad(A, B, C, D, S, T, U, V, u, l)
-  {{quad}}
+function [K, F, M] = crunch_quad(A, B, C, D, R, S, T, U, u, l, f)
+  {{{quad}}}
 end
 
-function [K, F, M, P] = crunch_serindipity(A, B, C, D, E, F, G, H, ...
-                                  S, T, U, V, W, X, Y, Z, u, l)
-  {{serindipity}}
+function [K, F, M] = crunch_serindipity(A, B, C, D, E, F, G, H, ...
+                                  R, S, T, U, V, W, X, Y, u, l, f)
+  {{{serindipity}}}
+end
+
+function [K, F, M] = crunch_bubble(A, B, C, D, E, F, G, H, I, ...
+                                   R, S, T, U, V, W, X, Y, Z, u, l, f)
+  {{{bubble}}}
 end

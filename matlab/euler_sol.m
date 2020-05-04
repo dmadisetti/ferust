@@ -18,11 +18,12 @@ c2 = @(c1) -q*L^2/(2*E*I) - c1*L
 c1 = -(5*q*L^4 - 24*E*I*P)/(8*E*I*L^3)
 
 c2 = c2(c1)
-% c2 =(q*L^4 - 24*E*I*P)/(8*E*I*L^2)
+c2 =(q*L^4 - 24*E*I*P)/(8*E*I*L^2)
+u = @(x) q*x^4/(24*E*I) + c1 * x^3/6 + c2 * x^2/2
 
 shear = @(x) q * x + c1*E*I 
 M = @(x) q*x^2/(2*E*I) + c1 * x + c2
-u = @(x) q*x^4/(24*E*I) + c1 * x^3/6 + c2 * x^2/2
+u = @(x) q*x.^4/(24*E*I) + c1 * x.^3/6 + c2 * x.^2/2
 
 %assert(M(L) == 0)
 %assert(u(L) == -P)
@@ -30,9 +31,9 @@ u = @(x) q*x^4/(24*E*I) + c1 * x^3/6 + c2 * x^2/2
 r = shear(0)
 
 % Consider at point A
-sigma_xy = shear(L/2)
-sigma_xx = -M(L/2) * (H/2)/I
-u(L/2)
+sigma_xy = -shear(L/2)
+sigma_xx = -(M(L/2) * (H/2)/I)
+u(L)
 %%
 clc; clear;
 syms c1 c2 q L E I H P q
